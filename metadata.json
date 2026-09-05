@@ -1,0 +1,10 @@
+{
+  "name": "MediKiosk Clinical Platform",
+  "description": "Smart Hospital Digital Care, Multilingual Voice Kiosk, Clinical Safety & AI Workflow Platform.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
