@@ -6,15 +6,18 @@ import { generateClinicalCaseSummary } from './server/geminiService.js';
 import { runClinicalSafetyChecks } from './server/safetyEngine.js';
 
 async function startServer() {
+  await db.initialize();
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT || 8080);
   const realtimeClients = new Set<Response>();
 
   // JSON middleware
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true }));
   app.use((req, res, next) => {
-    res.setHeader('Access-Control-Allow-Origin', process.env.FRONTEND_URL || '*');
+    const allowedOrigin = process.env.FRONTEND_URL;
+    if (allowedOrigin && req.headers.origin === allowedOrigin) res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+    else if (!allowedOrigin) res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Device-Role');
     next();
   });
@@ -45,7 +48,7 @@ async function startServer() {
       geminiConfigured: Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY'),
       timestamp: new Date().toISOString(),
       realtimeClients: realtimeClients.size,
-      persistence: process.env.MEDIKIOSK_DATA_FILE || 'data/medikiosk.json',
+      persistence: process.env.DATABASE_URL ? 'postgresql' : `sqlite:${process.env.SQLITE_FILE || 'data/medikiosk.sqlite'}`,
     });
   });
 
@@ -146,8 +149,22 @@ async function startServer() {
   app.post('/api/cases/:id/answers', (req, res) => {
     try {
       const patient = db.patients.find((item) => item.id === req.params.id);
-      if (!patient?.symptoms) return res.status(404).json({ success: false, message: 'Case not found' });
-      const intake = { ...patient.symptoms, structuredHistory: { ...patient.symptoms.structuredHistory, ...(req.body.answers || {}) } };
+      if (!patient) return res.status(404).json({ success: false, message: 'Case not found' });
+      const intake = {
+        chiefComplaint: patient.symptoms?.chiefComplaint || 'Registration in progress',
+        symptoms: patient.symptoms?.symptoms || [],
+        duration: patient.symptoms?.duration || '',
+        severity: patient.symptoms?.severity || 'Mild',
+        medicalHistory: patient.symptoms?.medicalHistory || [],
+        medicationHistory: patient.symptoms?.medicationHistory || [],
+        knownAllergies: patient.symptoms?.knownAllergies || [],
+        lifestyle: patient.symptoms?.lifestyle || { smoking: false, alcohol: false, diet: 'Other', physicalActivity: 'Moderate' },
+        inputMethod: patient.symptoms?.inputMethod || 'Assisted',
+        languageUsed: patient.symptoms?.languageUsed || patient.demographics.preferredLanguage,
+        recordedAt: patient.symptoms?.recordedAt || new Date().toISOString(),
+        ...patient.symptoms,
+        structuredHistory: { ...patient.symptoms?.structuredHistory, ...(req.body.answers || {}) },
+      };
       const updated = db.updatePatientIntake(req.params.id, intake, req.body.user || 'Patient Kiosk', req.body.role || 'Nurse');
       res.json({ success: true, case: updated });
     } catch (error: any) { res.status(400).json({ success: false, message: error.message }); }

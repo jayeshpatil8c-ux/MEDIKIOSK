@@ -18,8 +18,7 @@ import {
 } from './types.js';
 import { runClinicalSafetyChecks } from './safetyEngine.js';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import path from 'node:path';
+import { PersistentRepository, PersistedCollections } from './persistence.js';
 
 export interface ClinicalRealtimeEvent {
   type: 'patient.created' | 'patient.updated' | 'case.updated' | 'case.status.changed' | 'safety_flag.created' | 'queue.updated';
@@ -37,33 +36,42 @@ class InMemoryDatabase extends EventEmitter {
   referrals: Referral[] = [];
   auditTrail: AuditEvent[] = [];
   notifications: NotificationItem[] = [];
-  private readonly persistenceFile = process.env.MEDIKIOSK_DATA_FILE || path.resolve(process.cwd(), 'data/medikiosk.json');
+  private readonly repository = new PersistentRepository();
+  private writeChain: Promise<void> = Promise.resolve();
 
   constructor() {
     super();
     this.seedInitialData();
-    this.loadPersistedState();
   }
 
-  private loadPersistedState() {
-    if (!existsSync(this.persistenceFile)) return;
-    try {
-      const saved = JSON.parse(readFileSync(this.persistenceFile, 'utf8'));
-      for (const key of ['patients', 'appointments', 'opdTokens', 'prescriptions', 'referrals', 'auditTrail', 'notifications'] as const) {
-        if (Array.isArray(saved[key])) this[key] = saved[key] as never;
-      }
-    } catch (error) {
-      console.error('Could not load persisted MediKiosk data:', error);
+  public async initialize() {
+    const saved = await this.repository.initialize();
+    if (saved && saved.patients.length > 0) {
+      this.applyPersistedState(saved);
+    } else {
+      await this.repository.save(this.persistedState());
     }
   }
 
-  public persist() {
-    mkdirSync(path.dirname(this.persistenceFile), { recursive: true });
-    writeFileSync(this.persistenceFile, JSON.stringify({ patients: this.patients, appointments: this.appointments, opdTokens: this.opdTokens, prescriptions: this.prescriptions, referrals: this.referrals, auditTrail: this.auditTrail, notifications: this.notifications }, null, 2));
+  private persistedState(): PersistedCollections {
+    return { patients: this.patients, appointments: this.appointments, opdTokens: this.opdTokens, prescriptions: this.prescriptions, referrals: this.referrals, auditTrail: this.auditTrail, notifications: this.notifications };
+  }
+
+  private applyPersistedState(saved: PersistedCollections) {
+    this.patients = saved.patients;
+    this.appointments = saved.appointments;
+    this.opdTokens = saved.opdTokens;
+    this.prescriptions = saved.prescriptions;
+    this.referrals = saved.referrals;
+    this.auditTrail = saved.auditTrail;
+    this.notifications = saved.notifications;
   }
 
   public publish(event: ClinicalRealtimeEvent) {
-    this.persist();
+    const snapshot = this.persistedState();
+    this.writeChain = this.writeChain
+      .then(() => this.repository.save(snapshot))
+      .catch((error) => console.error('Database write failed:', error));
     this.emit('change', event);
   }
 

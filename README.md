@@ -10,7 +10,7 @@ cp .env.example .env
 npm run dev
 ```
 
-`npm run dev` starts the Node server on port `3000` and mounts the Vite middleware in development. For a production build:
+`npm run dev` starts the Node server on `PORT` or `8080` and mounts the Vite middleware in development. For a production build:
 
 ```bash
 npm run build
@@ -19,19 +19,21 @@ npm start
 
 ## Persistence
 
-The development repository stores JSON on the server at `data/medikiosk.json` by default. Set `MEDIKIOSK_DATA_FILE` to an absolute or deployment-specific persistent path. The file is ignored by Git. `DATABASE_URL` is reserved for a future hosted adapter; no database credentials are placed in the browser.
+The database adapter uses SQLite for local development when `DATABASE_URL` is empty. It creates `data/medikiosk.sqlite`, which is ignored by Git. Production deployments must set `DATABASE_URL` to a persistent PostgreSQL-compatible database; no JSON file is used as the production source of truth.
+
+The schema includes `patients`, `patient_cases`, `case_answers`, `queue`, `safety_flags`, `documents`, `doctor_notes`, and `audit_events`. Database initialization and schema creation happen before the server accepts requests. Every case is represented by a patient/case ID, status, and created/updated timestamps.
 
 ## Two-device demonstration
 
 1. Start the server on a machine reachable by both devices, using `npm run dev`.
-2. On the patient device open `http://SERVER_IP:3000/kiosk`.
-3. On the doctor device open `http://SERVER_IP:3000/doctor`.
+2. On the patient device open `http://SERVER_IP:8080/kiosk`.
+3. On the doctor device open `http://SERVER_IP:8080/doctor`.
 4. Allow microphone access on the kiosk if voice mode is used. Touch and keyboard entry remain available.
 5. Complete consent and identity. The kiosk creates the patient on the server immediately, so the doctor queue shows the new case while registration is in progress.
 6. Continue answering questions. Confirmed intake updates are persisted through `/api/patients/:id/intake`; the doctor client receives an SSE event at `/api/realtime` and refreshes automatically without a manual reload.
 7. Complete review to move the patient into the existing doctor workflow and queue.
 
-Both devices must be on the same network and the server firewall must allow port `3000`. For a deployed demo, expose the Node server over HTTPS and set `FRONTEND_URL` to the deployed origin.
+Both devices must be on the same network and the server firewall must allow port `8080`. For Cloud Run, set `DATABASE_URL`, deploy the built Node server, and use the Cloud Run HTTPS URL on both devices. Set `FRONTEND_URL` to the exact frontend origin when the frontend and API are hosted on different origins.
 
 ## Main API and realtime routes
 
@@ -50,7 +52,7 @@ Both devices must be on the same network and the server firewall must allow port
 Use the existing Admin/Demo reset action, or run:
 
 ```bash
-curl -X POST http://localhost:3000/api/demo/reset
+curl -X POST http://localhost:8080/api/demo/reset
 ```
 
 Reset requires confirmation in the UI. It reseeds the server repository and broadcasts a queue update to connected dashboards.
@@ -62,6 +64,18 @@ Reset requires confirmation in the UI. It reseeds the server repository and broa
 - `/admin`: existing administration view
 
 Every client shows `LIVE CONNECTED`, `RECONNECTING...`, or `OFFLINE`. On reconnect, the client refetches patients, queue, appointments, audit, notifications, and analytics from the server.
+
+## Cloud Run deployment
+
+Build with `npm run build`, then run `npm start`. Cloud Run supplies `PORT`; the server binds to `0.0.0.0` and falls back to `8080` locally. Configure these server-side environment variables:
+
+- `DATABASE_URL`: required production PostgreSQL connection string.
+- `DATABASE_SSL`: keep `true` for managed PostgreSQL unless the private connection explicitly does not require TLS.
+- `FRONTEND_URL`: exact allowed browser origin, or leave empty when frontend and API share the same origin.
+- `PORT`: supplied by Cloud Run; local fallback is `8080`.
+- `GEMINI_API_KEY`: optional server-side AI key; never expose it as a frontend variable.
+
+SSE is served from the same Cloud Run origin at `/api/realtime`, so deployed doctor dashboards reconnect and resynchronize from PostgreSQL after network interruptions or backend restarts.
 
 ## Safety and privacy
 
