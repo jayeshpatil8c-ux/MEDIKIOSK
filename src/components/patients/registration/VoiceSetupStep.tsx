@@ -20,6 +20,8 @@ import {
   voiceRecognition,
   getFriendlySpeechError,
 } from '../../../utils/speechHelper';
+import { useLanguage } from '../../../context/LanguageContext';
+import { useQuestionVoice } from '../../../hooks/useQuestionVoice';
 
 interface Props {
   selectedLanguage: VoiceLanguage;
@@ -36,6 +38,8 @@ export const VoiceSetupStep: React.FC<Props> = ({
   onBack,
   onContinue,
 }) => {
+  const { t } = useLanguage();
+  const { replay } = useQuestionVoice('voice', t('registration.question.voice'), selectedLanguage, isVoiceEnabled);
   const [micStatus, setMicStatus] = useState<'idle' | 'testing' | 'granted' | 'denied'>('idle');
   const [friendlyError, setFriendlyError] = useState<string | null>(null);
   const [audioLevel, setAudioLevel] = useState<number>(0);
@@ -142,7 +146,7 @@ export const VoiceSetupStep: React.FC<Props> = ({
             Step 2 of 10 • Voice Setup & Mic Test
           </div>
           <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight">
-            Voice Assistant & Microphone Verification
+            {t('registration.voice.title')}
           </h2>
           <p className="text-xs text-slate-500">
             MediKiosk supports hands-free navigation and voice dictation in {selectedLanguage}.

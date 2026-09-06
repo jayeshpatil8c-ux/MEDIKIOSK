@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { VoiceLanguage, speakText } from '../../../utils/speechHelper';
 import { Patient } from '../../../types';
+import { useLanguage } from '../../../context/LanguageContext';
 
 interface Props {
   patient: Patient;
@@ -35,6 +36,7 @@ export const TokenSlipStep: React.FC<Props> = ({
   isVoiceEnabled,
   onProceedToDoctor,
 }) => {
+  const { t } = useLanguage();
   const [countdown, setCountdown] = useState<number>(6);
   const [autoRedirect, setAutoRedirect] = useState<boolean>(true);
 
@@ -97,7 +99,7 @@ export const TokenSlipStep: React.FC<Props> = ({
           <CheckCircle2 className="w-9 h-9" />
         </div>
         <h2 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white tracking-tight">
-          Registration Complete!
+          {t('registration.token.title')}!
         </h2>
         <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 max-w-md mx-auto">
           Your OPD Consultation Slip has been generated. Your clinical file is now open on the Doctor's Station.

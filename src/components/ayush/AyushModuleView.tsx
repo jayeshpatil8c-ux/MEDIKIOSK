@@ -24,7 +24,7 @@ import {
 } from 'lucide-react';
 import { usePatients } from '../../context/PatientContext';
 import { useAuth } from '../../context/AuthContext';
-import { Patient, HomeopathyCase } from '../../types';
+import { AyurvedaCase, Patient, HomeopathyCase } from '../../types';
 
 interface Props {
   onNavigateTab: (tab: string) => void;
@@ -32,7 +32,7 @@ interface Props {
 }
 
 export const AyushModuleView: React.FC<Props> = ({ onNavigateTab, onSelectPatient }) => {
-  const { patients, activePatient, setActivePatient } = usePatients();
+  const { patients, activePatient, setActivePatient, updatePatientIntake } = usePatients();
   const { currentUser } = useAuth();
 
   const [selectedPatientId, setSelectedPatientId] = useState<string>(
@@ -41,34 +41,22 @@ export const AyushModuleView: React.FC<Props> = ({ onNavigateTab, onSelectPatien
   const [activeAyushSystem, setActiveAyushSystem] = useState<'ayurveda' | 'homeopathy'>('ayurveda');
 
   // ================= AYURVEDA STATE =================
-  const [selectedPrakriti, setSelectedPrakriti] = useState<'Vata-Pitta' | 'Pitta-Kapha' | 'Vata-Kapha' | 'Tridoshic' | 'Pure Pitta'>('Pitta-Kapha');
-  const [vikritiImbalance, setVikritiImbalance] = useState<'Pitta Aggravation (Amlapitta)' | 'Vata-Pitta Dushti' | 'Kapha Stagnation'>('Pitta Aggravation (Amlapitta)');
-  const [selectedAgni, setSelectedAgni] = useState<'Sama Agni' | 'Vishama Agni' | 'Tikshna Agni' | 'Manda Agni'>('Tikshna Agni');
-  const [amaStatus, setAmaStatus] = useState<'Nirama' | 'Saama (Toxic metabolic residue present)' | 'Mild Ama'>('Saama (Toxic metabolic residue present)');
-  const [koshtaType, setKoshtaType] = useState<'Mridu' | 'Madhyama' | 'Krura'>('Madhyama');
+  const [selectedPrakriti, setSelectedPrakriti] = useState<string>('Pending practitioner review');
+  const [vikritiImbalance, setVikritiImbalance] = useState<string>('Pending practitioner review');
+  const [selectedAgni, setSelectedAgni] = useState<string>('Pending practitioner review');
+  const [amaStatus, setAmaStatus] = useState<string>('Not assessed');
+  const [koshtaType, setKoshtaType] = useState<string>('Pending practitioner review');
 
-  const [nadiPariksha, setNadiPariksha] = useState('Manduka Gati (Froglike, leaping Pitta dominant pulse), 78 bpm regular');
-  const [jihvaExam, setJihvaExam] = useState('Mild yellowish-white coating in posterior 1/3, red edges');
-  const [dinacharyaAdvice, setDinacharyaAdvice] = useState(
-    'Brahma Muhurta rising (06:00 AM). Drink 250ml warm water with Ushnodaka. 15 mins Pranayama (Sheetali & Anulom Vilom). No daytime sleeping.'
-  );
-  const [ritucharyaAdvice, setRitucharyaAdvice] = useState(
-    'Sharad / Grishma season protocol: Avoid pungent, sour, and overly salty foods. Emphasize Ghritha (ghee), cow milk, and sweet melons.'
-  );
-  const [aharaNutrition, setAharaNutrition] = useState(
-    'Favor Tikta (Bitter), Madhura (Sweet), Kashaya (Astringent). Avoid fermented batter, green chilies, deep fried snacks, and late-night meals.'
-  );
+  const [nadiPariksha, setNadiPariksha] = useState('Pending practitioner examination');
+  const [jihvaExam, setJihvaExam] = useState('Pending practitioner examination');
+  const [dinacharyaAdvice, setDinacharyaAdvice] = useState('Practitioner notes pending');
+  const [ritucharyaAdvice, setRitucharyaAdvice] = useState('Practitioner notes pending');
+  const [aharaNutrition, setAharaNutrition] = useState('Practitioner notes pending');
+  const [practitionerNotes, setPractitionerNotes] = useState('');
 
-  const [panchakarmaTherapies, setPanchakarmaTherapies] = useState<Array<{ name: string; duration: string; rationale: string; status: string }>>([
-    { name: 'Takradhara (Buttermilk forehead stream)', duration: '7 days (45 min/session)', rationale: 'Calms aggravated Pitta in Majja and regulates digestive fire', status: 'Recommended' },
-    { name: 'Virechana Karma (Therapeutic Purgation)', duration: 'Planned after Snehana', rationale: 'Clears metabolic morbid Pitta from Yakrit and Amashaya', status: 'Assessment Req.' },
-  ]);
+  const [panchakarmaTherapies, setPanchakarmaTherapies] = useState<Array<{ name: string; duration: string; rationale: string; status: string }>>([]);
 
-  const [herbalFormulations, setHerbalFormulations] = useState<Array<{ name: string; dose: string; anupana: string }>>([
-    { name: 'Avipattikar Churna', dose: '3g twice daily before meals', anupana: 'Warm water' },
-    { name: 'Kamdudha Ras (Moti Yukt)', dose: '250mg twice daily', anupana: 'Fresh butter or honey' },
-    { name: 'Sutshekhar Ras', dose: '1 tab (125mg) twice daily', anupana: 'Gulgulu water / warm water' },
-  ]);
+  const [herbalFormulations, setHerbalFormulations] = useState<Array<{ name: string; dose: string; anupana: string }>>([]);
   const [newHerbName, setNewHerbName] = useState('');
   const [newHerbDose, setNewHerbDose] = useState('');
   const [newHerbAnupana, setNewHerbAnupana] = useState('Warm water');
@@ -114,7 +102,17 @@ export const AyushModuleView: React.FC<Props> = ({ onNavigateTab, onSelectPatien
     setNewHerbDose('');
   };
 
-  const handleSaveAyushPlan = () => {
+  const handleSaveAyushPlan = async () => {
+    if (patient?.symptoms?.ayurvedaCase) {
+      const updatedCase: AyurvedaCase = {
+        ...patient.symptoms.ayurvedaCase,
+        practitionerObservations: practitionerNotes,
+        practitionerAssessment: `Prakriti: ${selectedPrakriti}; Vikriti: ${vikritiImbalance}; Agni: ${selectedAgni}; Koshta: ${koshtaType}; Nadi: ${nadiPariksha}; Jihva: ${jihvaExam}`,
+        status: 'Practitioner confirmed',
+        updatedAt: new Date().toISOString(),
+      };
+      await updatePatientIntake(patient.id, { ...patient.symptoms, ayurvedaCase: updatedCase });
+    }
     setIsSaved(true);
     setTimeout(() => setIsSaved(false), 3500);
   };
@@ -188,6 +186,31 @@ export const AyushModuleView: React.FC<Props> = ({ onNavigateTab, onSelectPatien
         </div>
       )}
 
+      {patient?.symptoms?.ayurvedaCase && (
+        <div className="p-5 rounded-2xl bg-emerald-950/20 dark:bg-emerald-950/40 border border-emerald-500/30 space-y-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="text-[10px] uppercase tracking-wider font-black text-emerald-600 dark:text-emerald-400">Ayurvedic Practitioner Review</div>
+              <h2 className="text-xl font-black text-slate-900 dark:text-white">🌿 Ayurvedic Case Summary</h2>
+              <p className="text-xs text-slate-500">AI-assisted preliminary case summary — practitioner review and confirmation required.</p>
+            </div>
+            <span className="px-2.5 py-1 rounded-lg bg-amber-500/15 text-amber-700 dark:text-amber-300 text-[10px] font-bold">{patient.symptoms.ayurvedaCase.status}</span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+            {[
+              ['Prakriti', patient.symptoms.ayurvedaCase.prakriti.preliminaryPattern],
+              ['Vikriti', patient.symptoms.ayurvedaCase.vikriti.preliminaryPattern],
+              ['Agni', patient.symptoms.ayurvedaCase.agni.preliminaryAssessment],
+              ['Completeness', `${patient.symptoms.ayurvedaCase.prakriti.completeness}%`],
+            ].map(([label, value]) => <div key={label} className="p-3 rounded-xl bg-white/70 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800"><span className="block text-[10px] uppercase font-bold text-slate-400">{label}</span><span className="font-bold text-slate-900 dark:text-white">{value}</span><span className="block text-[10px] text-cyan-600 mt-1">Patient reported / AI structured</span></div>)}
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+            {Object.entries(patient.symptoms.ayurvedaCase.ashtavidha as Record<string, { value: string; source: string }>).map(([key, item]) => <div key={key} className="p-3 rounded-xl bg-white/50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800"><span className="font-bold capitalize text-slate-700 dark:text-slate-300">{key}</span><p className="mt-1 text-slate-500">{item.value}</p><span className="text-[10px] text-amber-600">{item.source}</span></div>)}
+          </div>
+          <div><label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Practitioner observations and notes</label><textarea value={practitionerNotes} onChange={(event) => setPractitionerNotes(event.target.value)} rows={3} placeholder="Add Darshana, Sparshana, Prashna, and practitioner observations. No treatment is generated automatically." className="w-full p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs" /></div>
+        </div>
+      )}
+
       {/* System Tabs: Ayurveda vs Homeopathy */}
       <div className="flex items-center gap-3 border-b border-slate-200 dark:border-slate-800 pb-3">
         <button
@@ -237,7 +260,8 @@ export const AyushModuleView: React.FC<Props> = ({ onNavigateTab, onSelectPatien
                 onChange={(e: any) => setSelectedPrakriti(e.target.value)}
                 className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-bold text-slate-900 dark:text-white focus:outline-none"
               >
-                <option value="Pitta-Kapha">Pitta-Kapha (Dominant: Pitta • Secondary: Kapha)</option>
+                <option value="Pending practitioner review">Pending practitioner review</option>
+                <option value="Pitta-Kapha">Pitta-Kapha (Preliminary observation)</option>
                 <option value="Vata-Pitta">Vata-Pitta (Dominant: Vata • Secondary: Pitta)</option>
                 <option value="Vata-Kapha">Vata-Kapha</option>
                 <option value="Tridoshic">Tridoshic (Balanced Sama)</option>
@@ -258,7 +282,8 @@ export const AyushModuleView: React.FC<Props> = ({ onNavigateTab, onSelectPatien
                 onChange={(e: any) => setVikritiImbalance(e.target.value)}
                 className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-bold text-slate-900 dark:text-white focus:outline-none"
               >
-                <option value="Pitta Aggravation (Amlapitta)">Pitta Aggravation (Amlapitta / Hyperacidity)</option>
+                <option value="Pending practitioner review">Pending practitioner review</option>
+                <option value="Pitta Aggravation (Amlapitta)">Pitta-oriented observations (not diagnosis)</option>
                 <option value="Vata-Pitta Dushti">Vata-Pitta Dushti (Spasmodic pain + reflux)</option>
                 <option value="Kapha Stagnation">Kapha Stagnation (Heavy digestion, sluggish)</option>
               </select>
@@ -277,7 +302,8 @@ export const AyushModuleView: React.FC<Props> = ({ onNavigateTab, onSelectPatien
                 onChange={(e: any) => setSelectedAgni(e.target.value)}
                 className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-bold text-slate-900 dark:text-white focus:outline-none"
               >
-                <option value="Tikshna Agni">Tikshna Agni (Overactive intense digestion / heartburn)</option>
+                <option value="Pending practitioner review">Pending practitioner review</option>
+                <option value="Tikshna Agni">Tikshna Agni (preliminary observation)</option>
                 <option value="Manda Agni">Manda Agni (Sluggish fire / heaviness)</option>
                 <option value="Vishama Agni">Vishama Agni (Irregular fluctuating fire)</option>
                 <option value="Sama Agni">Sama Agni (Equilibrium fire)</option>
@@ -371,9 +397,9 @@ export const AyushModuleView: React.FC<Props> = ({ onNavigateTab, onSelectPatien
             <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
               <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
                 <Flame className="w-4 h-4 text-emerald-500" />
-                Prescribed Panchakarma & External Procedures
+                Practitioner Treatment Plan (Optional)
               </h3>
-              <span className="text-[10px] text-slate-400">Practitioner Supervised Only</span>
+              <span className="text-[10px] text-slate-400">No treatment is generated automatically</span>
             </div>
 
             <div className="space-y-2">
@@ -403,7 +429,7 @@ export const AyushModuleView: React.FC<Props> = ({ onNavigateTab, onSelectPatien
             <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
               <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
                 <Pill className="w-4 h-4 text-emerald-500" />
-                Ayurvedic Formulations (Aushadhi Yoga)
+                Practitioner-entered Formulations (Optional)
               </h3>
             </div>
 

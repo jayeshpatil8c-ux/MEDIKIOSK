@@ -10,6 +10,7 @@ export interface User {
 }
 
 export type TriagePriority = 'GREEN' | 'YELLOW' | 'ORANGE' | 'RED';
+export type CarePathway = 'allopathy' | 'ayurveda';
 
 export type PatientStatus = 
   | 'Registered'
@@ -79,6 +80,44 @@ export interface SymptomRecord {
   inputMethod?: 'Text' | 'Voice' | 'Assisted';
   languageUsed?: 'English' | 'Hindi' | 'Marathi';
   recordedAt: string;
+  carePathway?: CarePathway;
+  structuredHistory?: Record<string, string | string[]>;
+  urgency?: 'ROUTINE' | 'PRIORITY' | 'URGENT' | 'IMMEDIATE';
+  redFlagEvidence?: string[];
+  ayurvedaCase?: AyurvedaCase;
+}
+
+export interface AyurvedaCase {
+  patientId?: string;
+  chiefComplaint: string;
+  rogaItihasa: Record<string, string | string[]>;
+  nidanaHistory: Record<string, string | string[]>;
+  prakriti: { observations: Record<string, string | string[]>; preliminaryPattern: string; completeness: number; status: 'Awaiting practitioner confirmation' };
+  vikriti: { observations: Record<string, string | string[]>; preliminaryPattern: string; status: 'Awaiting practitioner confirmation' };
+  agni: { observations: Record<string, string | string[]>; preliminaryAssessment: string; status: 'Awaiting practitioner confirmation' };
+  amaScreen: Record<string, string | string[]>;
+  koshta: Record<string, string | string[]>;
+  mala: Record<string, string | string[]>;
+  mutra: Record<string, string | string[]>;
+  nidra: Record<string, string | string[]>;
+  ahara: Record<string, string | string[]>;
+  vihara: Record<string, string | string[]>;
+  dinacharya: Record<string, string | string[]>;
+  ritucharya: Record<string, string | string[]>;
+  satmya: Record<string, string | string[]>;
+  satva: Record<string, string | string[]>;
+  desha: Record<string, string | string[]>;
+  kala: Record<string, string | string[]>;
+  ashtavidha: Record<string, { value: string; source: 'Patient reported' | 'Practitioner pending' }>;
+  dashavidha: Record<string, { value: string; source: 'AI structured' | 'Practitioner pending' }>;
+  srotas: string[];
+  practitionerObservations: string;
+  practitionerAssessment: string;
+  safetyFlags: string[];
+  documents: string[];
+  status: 'Draft' | 'Awaiting practitioner review' | 'Practitioner confirmed';
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface TriageRecord {
@@ -337,6 +376,7 @@ export interface Patient {
   timeline?: ClinicalTimelineEvent[];
   createdAt: string;
   updatedAt: string;
+  carePathway?: CarePathway;
 }
 
 export interface OPDToken {

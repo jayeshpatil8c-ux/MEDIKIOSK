@@ -1,6 +1,8 @@
 import React from 'react';
 import { Globe, Volume2, ArrowRight, CheckCircle2, Mic } from 'lucide-react';
-import { VoiceLanguage, speakText, VOICE_PROMPTS } from '../../../utils/speechHelper';
+import { VoiceLanguage, speakText, VOICE_PROMPTS, stopSpeaking } from '../../../utils/speechHelper';
+import { useLanguage } from '../../../context/LanguageContext';
+import { useQuestionVoice } from '../../../hooks/useQuestionVoice';
 
 interface Props {
   selectedLanguage: VoiceLanguage;
@@ -15,6 +17,8 @@ export const LanguageSelectionStep: React.FC<Props> = ({
   onContinue,
   isVoiceEnabled,
 }) => {
+  const { t, isVoiceEnabled: globalVoiceEnabled } = useLanguage();
+  const { replay } = useQuestionVoice('language', t('registration.question.language'), selectedLanguage, globalVoiceEnabled);
   const languages: {
     id: VoiceLanguage;
     name: string;
@@ -63,7 +67,7 @@ export const LanguageSelectionStep: React.FC<Props> = ({
           Step 1 of 10 • Language First
         </div>
         <h2 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white tracking-tight">
-          CHOOSE YOUR LANGUAGE / अपनी भाषा चुनें / आपली भाषा निवडा
+          {t('registration.language.title')}
         </h2>
         <p className="text-sm text-slate-600 dark:text-slate-400 max-w-xl mx-auto">
           The entire hospital registration, voice commands, clinical consent form, and queue token instructions will adapt to your choice.
@@ -79,10 +83,8 @@ export const LanguageSelectionStep: React.FC<Props> = ({
               key={lang.id}
               id={`select-lang-${lang.id.toLowerCase()}`}
               onClick={() => {
+                stopSpeaking();
                 onSelectLanguage(lang.id);
-                if (isVoiceEnabled) {
-                  speakText(VOICE_PROMPTS[lang.id].welcome, lang.id);
-                }
               }}
               role="button"
               tabIndex={0}

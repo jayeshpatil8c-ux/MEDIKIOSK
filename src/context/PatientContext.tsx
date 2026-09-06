@@ -30,6 +30,7 @@ interface PatientContextType {
   notifications: NotificationItem[];
   analytics: any;
   loading: boolean;
+  realtimeStatus: 'connected' | 'reconnecting' | 'offline';
   refreshData: () => Promise<void>;
   reloadPatients: () => Promise<void>;
   registerPatient: (demographics: PatientDemographics) => Promise<Patient>;
@@ -63,6 +64,7 @@ export const PatientProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [analytics, setAnalytics] = useState<any>(null);
   const [loading, setLoading] = useState<boolean>(true);
+  const [realtimeStatus, setRealtimeStatus] = useState<'connected' | 'reconnecting' | 'offline'>('reconnecting');
 
   const refreshData = useCallback(async () => {
     try {
@@ -114,6 +116,19 @@ export const PatientProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   useEffect(() => {
     refreshData();
+  }, [refreshData]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof EventSource === 'undefined') {
+      setRealtimeStatus('offline');
+      return;
+    }
+    const source = new EventSource('/api/realtime');
+    const refreshFromEvent = () => { setRealtimeStatus('connected'); void refreshData(); };
+    source.onopen = () => setRealtimeStatus('connected');
+    source.onerror = () => setRealtimeStatus('reconnecting');
+    ['patient.created', 'patient.updated', 'case.updated', 'case.status.changed', 'safety_flag.created', 'queue.updated'].forEach((eventName) => source.addEventListener(eventName, refreshFromEvent));
+    return () => source.close();
   }, [refreshData]);
 
   const selectPatientById = (id: string) => {
@@ -383,6 +398,7 @@ export const PatientProvider: React.FC<{ children: React.ReactNode }> = ({ child
         notifications,
         analytics,
         loading,
+        realtimeStatus,
         refreshData,
         reloadPatients: refreshData,
         registerPatient,

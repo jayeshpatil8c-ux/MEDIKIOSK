@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   FileText,
   UploadCloud,
@@ -15,6 +15,8 @@ import {
 } from 'lucide-react';
 import { VoiceLanguage } from '../../../utils/speechHelper';
 import { MedicalDocument } from '../../../types';
+import { useLanguage } from '../../../context/LanguageContext';
+import { useQuestionVoice } from '../../../hooks/useQuestionVoice';
 
 interface Props {
   scannedDocuments: MedicalDocument[];
@@ -27,13 +29,18 @@ interface Props {
 export const DocumentScannerStep: React.FC<Props> = ({
   scannedDocuments,
   setScannedDocuments,
+  selectedLanguage,
   onBack,
   onContinue,
 }) => {
+  const { t, isVoiceEnabled } = useLanguage();
+  const { replay } = useQuestionVoice('documents', t('registration.question.documents'), selectedLanguage, isVoiceEnabled);
   const [isScanning, setIsScanning] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'sample' | 'upload' | 'camera'>('sample');
   const [selectedReportId, setSelectedReportId] = useState<string>('cbc_fbs');
   const [editingDocId, setEditingDocId] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   // Pre-configured Sample Clinical Reports for instant demo
   const sampleReports: {
@@ -124,6 +131,33 @@ export const DocumentScannerStep: React.FC<Props> = ({
     setScannedDocuments(scannedDocuments.filter((d) => d.id !== id));
   };
 
+  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    setUploadError(null);
+    if (!file) return;
+
+    const acceptedTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
+    if (!acceptedTypes.includes(file.type)) {
+      setUploadError('Please choose a PDF, JPG, PNG, or WEBP document.');
+      return;
+    }
+
+    const uploadedDocument: MedicalDocument = {
+      id: `upload_${Date.now()}`,
+      name: file.name,
+      title: file.name,
+      category: file.type === 'application/pdf' ? 'Lab Report' : 'Imaging Report',
+      uploadedAt: new Date().toISOString(),
+      date: new Date().toISOString().slice(0, 10),
+      source: 'Upload',
+      confidence: 0,
+      verificationStatus: 'Unverified',
+      extractedData: { diagnoses: [], medications: [], tests: [], confidenceScore: 0 },
+    };
+    setScannedDocuments([...scannedDocuments, uploadedDocument]);
+  };
+
   return (
     <div className="space-y-6 animate-fadeIn">
       {/* Header */}
@@ -131,7 +165,7 @@ export const DocumentScannerStep: React.FC<Props> = ({
         <div>
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/30 text-cyan-600 dark:text-cyan-400 text-xs font-bold uppercase tracking-wider mb-1">
             <FileCheck className="w-3.5 h-3.5" />
-            Step 7 of 10 • Document Scanning & OCR
+            {t('registration.documents.title')}
           </div>
           <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight">
             Clinical Records & Medical Report OCR
@@ -241,13 +275,22 @@ export const DocumentScannerStep: React.FC<Props> = ({
           <div className="text-xs text-slate-600 dark:text-slate-300">
             Drag and drop clinical PDF reports or photos of prescriptions here, or touch to browse.
           </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/pdf,image/jpeg,image/png,image/webp"
+            onChange={handleFileUpload}
+            className="sr-only"
+            aria-label="Select medical document file"
+          />
           <button
             type="button"
-            onClick={() => handleSimulateOCR('cbc_fbs')}
+            onClick={() => fileInputRef.current?.click()}
             className="px-4 py-2 rounded-xl bg-slate-200 dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-bold text-xs"
           >
             Select Document File
           </button>
+          {uploadError && <p className="text-xs text-rose-600 dark:text-rose-400">{uploadError}</p>}
         </div>
       )}
 
@@ -292,8 +335,8 @@ export const DocumentScannerStep: React.FC<Props> = ({
                   <div className="flex items-center gap-2">
                     <CheckCircle className="w-4 h-4 text-emerald-500" />
                     <span className="font-bold text-slate-900 dark:text-white">{doc.name}</span>
-                    <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold">
-                      Verified ({(doc.confidence * 100).toFixed(1)}%)
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${doc.confidence > 0 ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-amber-500/10 text-amber-600 dark:text-amber-400'}`}>
+                      {doc.confidence > 0 ? `Verified (${(doc.confidence * 100).toFixed(1)}%)` : 'Pending Verification'}
                     </span>
                   </div>
                   <button

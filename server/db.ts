@@ -17,8 +17,18 @@ import {
   NotificationItem,
 } from './types.js';
 import { runClinicalSafetyChecks } from './safetyEngine.js';
+import { EventEmitter } from 'node:events';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 
-class InMemoryDatabase {
+export interface ClinicalRealtimeEvent {
+  type: 'patient.created' | 'patient.updated' | 'case.updated' | 'case.status.changed' | 'safety_flag.created' | 'queue.updated';
+  patientId?: string;
+  changedSections?: string[];
+  updatedAt: string;
+}
+
+class InMemoryDatabase extends EventEmitter {
   users: User[] = [];
   patients: Patient[] = [];
   appointments: Appointment[] = [];
@@ -27,9 +37,46 @@ class InMemoryDatabase {
   referrals: Referral[] = [];
   auditTrail: AuditEvent[] = [];
   notifications: NotificationItem[] = [];
+  private readonly persistenceFile = process.env.MEDIKIOSK_DATA_FILE || path.resolve(process.cwd(), 'data/medikiosk.json');
 
   constructor() {
+    super();
     this.seedInitialData();
+    this.loadPersistedState();
+  }
+
+  private loadPersistedState() {
+    if (!existsSync(this.persistenceFile)) return;
+    try {
+      const saved = JSON.parse(readFileSync(this.persistenceFile, 'utf8'));
+      for (const key of ['patients', 'appointments', 'opdTokens', 'prescriptions', 'referrals', 'auditTrail', 'notifications'] as const) {
+        if (Array.isArray(saved[key])) this[key] = saved[key] as never;
+      }
+    } catch (error) {
+      console.error('Could not load persisted MediKiosk data:', error);
+    }
+  }
+
+  public persist() {
+    mkdirSync(path.dirname(this.persistenceFile), { recursive: true });
+    writeFileSync(this.persistenceFile, JSON.stringify({ patients: this.patients, appointments: this.appointments, opdTokens: this.opdTokens, prescriptions: this.prescriptions, referrals: this.referrals, auditTrail: this.auditTrail, notifications: this.notifications }, null, 2));
+  }
+
+  public publish(event: ClinicalRealtimeEvent) {
+    this.persist();
+    this.emit('change', event);
+  }
+
+  public updateCaseStatus(patientId: string, status: Patient['status'], user = 'Staff Member', role: any = 'Doctor'): Patient {
+    const patient = this.patients.find((item) => item.id === patientId);
+    if (!patient) throw new Error('Patient not found');
+    patient.status = status;
+    patient.updatedAt = new Date().toISOString();
+    const token = this.opdTokens.find((item) => item.patientId === patientId);
+    if (token) token.status = status === 'Case Closed' ? 'Completed' : status === 'Doctor Review' ? 'Waiting for Doctor' : token.status;
+    this.logAudit(user, role, 'CASE_STATUS_CHANGED', 'PatientCase', patientId, ['status'], undefined, status, 'Case status changed by staff');
+    this.publish({ type: 'case.status.changed', patientId, changedSections: ['status', 'queue'], updatedAt: patient.updatedAt });
+    return patient;
   }
 
   seedInitialData() {
@@ -1068,6 +1115,8 @@ class InMemoryDatabase {
       patientId,
     });
 
+    this.publish({ type: 'patient.created', patientId, changedSections: ['demographics', 'queue'], updatedAt: now });
+
     return newPatient;
   }
 
@@ -1119,6 +1168,7 @@ class InMemoryDatabase {
         `Updated demographic profile`,
         `Demographic fields edited by ${user} (${role}). Clinical records remained protected.`
       );
+      this.publish({ type: 'patient.updated', patientId, changedSections: ['demographics'], updatedAt: patient.updatedAt });
     }
 
     return patient;
@@ -1144,7 +1194,22 @@ class InMemoryDatabase {
       patient.demographics.age
     );
 
+    if (intake.urgency === 'IMMEDIATE' && intake.redFlagEvidence?.length) {
+      patient.safetyAlerts.unshift({
+        id: `clinical-alert-${Date.now()}`,
+        level: 'CRITICAL',
+        title: 'Clinical Safety Alert',
+        reason: intake.redFlagEvidence.join('; '),
+        actionRequired: 'Alert nurse and doctor for immediate clinical review.',
+        timestamp: new Date().toISOString(),
+        acknowledged: false,
+      });
+      const token = this.opdTokens.find((item) => item.patientId === patientId);
+      if (token) token.priority = 'RED';
+    }
+
     this.logAudit(user, role, 'INTAKE_RECORDED', 'SymptomRecord', patientId, undefined, undefined, intake.chiefComplaint, 'Patient symptoms and clinical history logged');
+    this.publish({ type: 'case.updated', patientId, changedSections: ['history', 'safety'], updatedAt: patient.updatedAt });
 
     return patient;
   }
@@ -1201,6 +1266,8 @@ class InMemoryDatabase {
       });
     }
 
+    this.publish({ type: 'safety_flag.created', patientId, changedSections: ['triage', 'safety'], updatedAt: patient.updatedAt });
+
     return patient;
   }
 
@@ -1235,6 +1302,7 @@ class InMemoryDatabase {
     patient.doctorReview = review;
     patient.status = 'Doctor Approved';
     patient.updatedAt = new Date().toISOString();
+    this.publish({ type: 'case.status.changed', patientId, changedSections: ['doctorReview', 'status'], updatedAt: patient.updatedAt });
 
     const token = this.opdTokens.find((t) => t.patientId === patientId);
     if (token) {
@@ -1264,6 +1332,7 @@ class InMemoryDatabase {
     patient.ayushAssessment = assessment;
     patient.status = 'AYUSH Consultation';
     patient.updatedAt = new Date().toISOString();
+    this.publish({ type: 'case.updated', patientId, changedSections: ['ayushAssessment', 'status'], updatedAt: patient.updatedAt });
 
     this.logAudit(
       user,
@@ -1297,6 +1366,7 @@ class InMemoryDatabase {
       patient.prescription = prescription;
       patient.status = 'Prescription Issued';
       patient.updatedAt = new Date().toISOString();
+      this.publish({ type: 'case.status.changed', patientId: patient.id, changedSections: ['prescription', 'status'], updatedAt: patient.updatedAt });
 
       // Check for safety / allergy conflicts
       patient.safetyAlerts = runClinicalSafetyChecks(
@@ -1340,6 +1410,7 @@ class InMemoryDatabase {
       patient.referral = referral;
       patient.status = 'Referred';
       patient.updatedAt = new Date().toISOString();
+      this.publish({ type: 'case.status.changed', patientId: patient.id, changedSections: ['referral', 'status'], updatedAt: patient.updatedAt });
     }
 
     this.logAudit(
@@ -1370,6 +1441,7 @@ class InMemoryDatabase {
 
     patient.status = 'Case Closed';
     patient.updatedAt = new Date().toISOString();
+    this.publish({ type: 'case.status.changed', patientId, changedSections: ['status'], updatedAt: patient.updatedAt });
 
     // Create completed visit entry
     const newVisit = {

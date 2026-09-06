@@ -20,6 +20,8 @@ import {
 } from 'lucide-react';
 import { VoiceLanguage, speakText, stopSpeaking } from '../../../utils/speechHelper';
 import { ROBINIA_STUDY_DATA } from '../../../data/consentStudyData';
+import { useLanguage } from '../../../context/LanguageContext';
+import { useQuestionVoice } from '../../../hooks/useQuestionVoice';
 
 interface Props {
   selectedLanguage: VoiceLanguage;
@@ -56,6 +58,8 @@ export const ConsentStep: React.FC<Props> = ({
   onContinue,
   onDecline,
 }) => {
+  const { t, isVoiceEnabled } = useLanguage();
+  const { replay } = useQuestionVoice('consent', t('registration.question.consent'), selectedLanguage, isVoiceEnabled);
   const study = ROBINIA_STUDY_DATA[selectedLanguage];
   const [zoom, setZoom] = useState<number>(100);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -204,7 +208,7 @@ export const ConsentStep: React.FC<Props> = ({
             Step 3 of 10 • Mandatory Informed Consent
           </div>
           <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight">
-            Patient Information Sheet & Written Consent Form
+            {t('registration.consent.title')}
           </h2>
           <p className="text-xs text-slate-500">
             Institutional Ethics Committee Approved Study Protocol (ECR/942/Inst/MH/2023/RR-26).

@@ -19,6 +19,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { usePatients } from '../../context/PatientContext';
 import { UserRole } from '../../types';
+import { LANGUAGE_OPTIONS, useLanguage } from '../../context/LanguageContext';
 
 interface Props {
   onToggleSidebar?: () => void;
@@ -31,6 +32,7 @@ export const Header: React.FC<Props> = ({ onToggleSidebar, onOpenSearch, onNavig
   const { currentUser, currentRole, switchRole, users } = useAuth();
   const { isDark, toggleTheme, isKioskMode, toggleKioskMode, isPresentationMode, togglePresentationMode, activePresentationStepInfo } = useTheme();
   const { notifications, markNotificationRead, patients } = usePatients();
+  const { languageCode, setLanguage } = useLanguage();
 
   const [showRoleDropdown, setShowRoleDropdown] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
@@ -130,6 +132,10 @@ export const Header: React.FC<Props> = ({ onToggleSidebar, onOpenSearch, onNavig
 
         {/* Right Actions: Presentation, Kiosk, Theme, Alerts, User Switcher */}
         <div className="flex items-center gap-2 sm:gap-2.5">
+          <label className="sr-only" htmlFor="global-language-selector">Language</label>
+          <select id="global-language-selector" value={languageCode} onChange={(event) => setLanguage(event.target.value as 'en' | 'hi' | 'mr')} className="min-h-[40px] max-w-[120px] rounded-xl border border-slate-200 bg-slate-100 px-2 text-xs font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
+            {LANGUAGE_OPTIONS.map((option) => <option key={option.code} value={option.code}>{option.nativeName}</option>)}
+          </select>
           {/* Real-time Clock */}
           <div className="hidden xl:flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 font-mono px-2">
             <Clock className="w-3.5 h-3.5 text-sky-500" />

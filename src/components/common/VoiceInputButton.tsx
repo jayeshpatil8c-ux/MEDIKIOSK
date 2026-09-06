@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Mic, MicOff, AlertCircle } from 'lucide-react';
+import { VoiceLanguage, voiceRecognition, getFriendlySpeechError } from '../../utils/speechHelper';
 
 interface Props {
   onTranscript: (text: string) => void;
-  language?: 'English' | 'Hindi' | 'Marathi';
+  language?: VoiceLanguage;
   label?: string;
   className?: string;
 }
@@ -15,70 +16,32 @@ export const VoiceInputButton: React.FC<Props> = ({
   className = '',
 }) => {
   const [isListening, setIsListening] = useState(false);
-  const [supported, setSupported] = useState(true);
+  const supported = voiceRecognition.isSupported();
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
-
-  useEffect(() => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      setSupported(false);
-    }
-  }, []);
 
   const handleToggle = () => {
     setErrorNotice(null);
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-
-    if (!SpeechRecognition) {
+    if (!supported) {
       setErrorNotice('Voice dictation is not supported by your current browser.');
       return;
     }
 
     if (isListening) {
+      voiceRecognition.abort();
       setIsListening(false);
       return;
     }
 
     try {
-      const recognition = new SpeechRecognition();
-      recognition.continuous = false;
-      recognition.interimResults = false;
-
-      // Select BCP 47 language code
-      let langCode = 'en-IN';
-      if (language === 'Hindi') langCode = 'hi-IN';
-      if (language === 'Marathi') langCode = 'mr-IN';
-      recognition.lang = langCode;
-
-      recognition.onstart = () => {
-        setIsListening(true);
-      };
-
-      recognition.onresult = (event: any) => {
-        const transcript = event.results[0][0].transcript;
-        if (transcript) {
-          onTranscript(transcript);
-        }
+      const started = voiceRecognition.startListening(language as VoiceLanguage, (result) => {
+        if (result.transcript) onTranscript(result.transcript);
         setIsListening(false);
-      };
-
-      recognition.onerror = (event: any) => {
-        console.warn('Speech recognition event error:', event.error);
+      }, (error) => {
         setIsListening(false);
-        if (event.error === 'not-allowed') {
-          setErrorNotice('Microphone access was denied. Please allow microphone permission.');
-        } else {
-          setErrorNotice('Speech not detected. Try speaking closer to the microphone.');
-        }
-      };
-
-      recognition.onend = () => {
-        setIsListening(false);
-      };
-
-      recognition.start();
+        setErrorNotice(getFriendlySpeechError(error).message);
+      }, () => setIsListening(false));
+      setIsListening(started);
     } catch (err) {
-      console.error('Failed to initiate speech recognition:', err);
       setIsListening(false);
       setErrorNotice('Microphone error.');
     }

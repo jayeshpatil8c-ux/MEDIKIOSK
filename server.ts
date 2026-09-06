@@ -8,10 +8,21 @@ import { runClinicalSafetyChecks } from './server/safetyEngine.js';
 async function startServer() {
   const app = express();
   const PORT = 3000;
+  const realtimeClients = new Set<Response>();
 
   // JSON middleware
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true }));
+  app.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', process.env.FRONTEND_URL || '*');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Device-Role');
+    next();
+  });
+
+  db.on('change', (event) => {
+    const payload = `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+    for (const client of realtimeClients) client.write(payload);
+  });
 
   // Request logger in dev
   app.use((req, res, next) => {
@@ -33,7 +44,20 @@ async function startServer() {
       version: '1.0.0',
       geminiConfigured: Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY'),
       timestamp: new Date().toISOString(),
+      realtimeClients: realtimeClients.size,
+      persistence: process.env.MEDIKIOSK_DATA_FILE || 'data/medikiosk.json',
     });
+  });
+
+  app.get('/api/realtime', (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+    realtimeClients.add(res);
+    res.write(`event: connected\ndata: ${JSON.stringify({ connectedClients: realtimeClients.size, serverTime: new Date().toISOString() })}\n\n`);
+    const heartbeat = setInterval(() => res.write(`event: heartbeat\ndata: ${Date.now()}\n\n`), 15000);
+    req.on('close', () => { clearInterval(heartbeat); realtimeClients.delete(res); });
   });
 
   // Authentication & Users
@@ -105,6 +129,32 @@ async function startServer() {
       return res.status(404).json({ success: false, message: 'Patient not found' });
     }
     res.json({ success: true, patient });
+  });
+
+  // Case-oriented aliases for kiosk/dashboard integrations.
+  app.get('/api/cases', (req, res) => res.json({ success: true, cases: db.patients }));
+  app.get('/api/cases/:id', (req, res) => {
+    const patient = db.patients.find((item) => item.id === req.params.id);
+    if (!patient) return res.status(404).json({ success: false, message: 'Case not found' });
+    res.json({ success: true, case: patient });
+  });
+  app.get('/api/cases/:id/answers', (req, res) => {
+    const patient = db.patients.find((item) => item.id === req.params.id);
+    if (!patient) return res.status(404).json({ success: false, message: 'Case not found' });
+    res.json({ success: true, answers: patient.symptoms?.structuredHistory || {} });
+  });
+  app.post('/api/cases/:id/answers', (req, res) => {
+    try {
+      const patient = db.patients.find((item) => item.id === req.params.id);
+      if (!patient?.symptoms) return res.status(404).json({ success: false, message: 'Case not found' });
+      const intake = { ...patient.symptoms, structuredHistory: { ...patient.symptoms.structuredHistory, ...(req.body.answers || {}) } };
+      const updated = db.updatePatientIntake(req.params.id, intake, req.body.user || 'Patient Kiosk', req.body.role || 'Nurse');
+      res.json({ success: true, case: updated });
+    } catch (error: any) { res.status(400).json({ success: false, message: error.message }); }
+  });
+  app.patch('/api/cases/:id/status', (req, res) => {
+    try { res.json({ success: true, case: db.updateCaseStatus(req.params.id, req.body.status, req.body.user, req.body.role) }); }
+    catch (error: any) { res.status(400).json({ success: false, message: error.message }); }
   });
 
   // Patients: Register (with duplicate detection)
@@ -512,6 +562,7 @@ async function startServer() {
   // Demo Hub: Reset all data
   app.post('/api/demo/reset', (req, res) => {
     db.seedInitialData();
+    db.publish({ type: 'queue.updated', changedSections: ['patients', 'queue'], updatedAt: new Date().toISOString() });
     res.json({ success: true, message: 'All demo clinic data reset to pristine state.' });
   });
 

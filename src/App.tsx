@@ -6,6 +6,7 @@
 import React, { useState } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
+import { LanguageProvider } from './context/LanguageContext';
 import { PatientProvider, usePatients } from './context/PatientContext';
 import { Header } from './components/common/Header';
 import { Sidebar } from './components/common/Sidebar';
@@ -33,12 +34,18 @@ import { PatientProfileView } from './components/patients/PatientProfileView';
 import { Patient } from './types';
 
 const MainAppContent: React.FC = () => {
-  const [currentTab, setCurrentTab] = useState<string>('dashboard');
+  const [currentTab, setCurrentTab] = useState<string>(() => {
+    if (typeof window === 'undefined') return 'dashboard';
+    if (window.location.pathname.startsWith('/kiosk')) return 'registration';
+    if (window.location.pathname.startsWith('/doctor')) return 'doctor';
+    if (window.location.pathname.startsWith('/admin')) return 'admin';
+    return 'dashboard';
+  });
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(true);
   const [isSearchOpen, setIsSearchOpen] = useState<boolean>(false);
   const [viewingPatient, setViewingPatient] = useState<Patient | null>(null);
 
-  const { activePatient, setActivePatient } = usePatients();
+  const { activePatient, setActivePatient, realtimeStatus } = usePatients();
 
   const handleSelectPatient = (patient: Patient, targetTab?: string) => {
     setActivePatient(patient);
@@ -79,6 +86,10 @@ const MainAppContent: React.FC = () => {
         onOpenSearch={() => setIsSearchOpen(true)}
         onNavigateTab={handleNavigateTab}
       />
+      <div className="fixed right-4 bottom-4 z-40 rounded-full border border-slate-200/80 dark:border-slate-700 bg-white/90 dark:bg-slate-900/90 px-3 py-1.5 text-[11px] font-bold shadow-lg backdrop-blur">
+        <span className={`mr-1.5 inline-block h-2 w-2 rounded-full ${realtimeStatus === 'connected' ? 'bg-emerald-500' : realtimeStatus === 'reconnecting' ? 'bg-amber-500 animate-pulse' : 'bg-rose-500'}`} />
+        {realtimeStatus === 'connected' ? 'LIVE CONNECTED' : realtimeStatus === 'reconnecting' ? 'RECONNECTING...' : 'OFFLINE'}
+      </div>
 
       {/* Layout Body: Sidebar + Dynamic Main Content */}
       <div className="flex flex-1 overflow-hidden">
@@ -215,12 +226,14 @@ const MainAppContent: React.FC = () => {
 
 export default function App() {
   return (
-    <ThemeProvider>
+    <LanguageProvider>
+      <ThemeProvider>
       <AuthProvider>
         <PatientProvider>
           <MainAppContent />
         </PatientProvider>
       </AuthProvider>
-    </ThemeProvider>
+      </ThemeProvider>
+    </LanguageProvider>
   );
 }

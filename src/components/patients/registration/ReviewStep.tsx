@@ -15,6 +15,8 @@ import {
 } from 'lucide-react';
 import { VoiceLanguage, speakText } from '../../../utils/speechHelper';
 import { MedicalDocument } from '../../../types';
+import { useLanguage } from '../../../context/LanguageContext';
+import { useQuestionVoice } from '../../../hooks/useQuestionVoice';
 
 interface Props {
   fullName: string;
@@ -81,6 +83,8 @@ export const ReviewStep: React.FC<Props> = ({
   onConfirm,
   isSubmitting,
 }) => {
+  const { t, isVoiceEnabled } = useLanguage();
+  const { replay } = useQuestionVoice('review', t('registration.question.review'), selectedLanguage, isVoiceEnabled);
   const handleReadAloudSummary = () => {
     const summaryText =
       selectedLanguage === 'Hindi'
@@ -102,7 +106,7 @@ export const ReviewStep: React.FC<Props> = ({
             Step 9 of 10 • Pre-Consultation Review
           </div>
           <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight">
-            Review Registration Information
+            {t('registration.review.title')}
           </h2>
           <p className="text-xs text-slate-500">
             Verify patient details before generating the official OPD queue token. Touch "Edit" on any section to revise.

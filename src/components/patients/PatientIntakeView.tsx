@@ -17,6 +17,7 @@ import {
 import { usePatients } from '../../context/PatientContext';
 import { Patient, SymptomRecord } from '../../types';
 import { VoiceInputButton } from '../common/VoiceInputButton';
+import { useLanguage } from '../../context/LanguageContext';
 
 interface Props {
   onNavigateTab: (tab: string) => void;
@@ -42,6 +43,7 @@ const COMMON_SYMPTOMS = [
 
 export const PatientIntakeView: React.FC<Props> = ({ onNavigateTab, onSelectPatient }) => {
   const { patients, activePatient, setActivePatient, updatePatientIntake } = usePatients();
+  const { languageName, setLanguage } = useLanguage();
 
   const [selectedPatientId, setSelectedPatientId] = useState<string>('');
   const [chiefComplaint, setChiefComplaint] = useState('');
@@ -50,7 +52,7 @@ export const PatientIntakeView: React.FC<Props> = ({ onNavigateTab, onSelectPati
   const [duration, setDuration] = useState('2 days');
   const [severity, setSeverity] = useState<'Mild' | 'Moderate' | 'Severe' | 'Critical'>('Moderate');
   const [intakeNotes, setIntakeNotes] = useState('');
-  const [language, setLanguage] = useState<'English' | 'Hindi' | 'Marathi'>('English');
+  const language = languageName;
   const [smoking, setSmoking] = useState(false);
   const [alcohol, setAlcohol] = useState(false);
   const [diet, setDiet] = useState<'Vegetarian' | 'Non-Vegetarian' | 'Vegan' | 'Other'>('Vegetarian');
@@ -68,7 +70,6 @@ export const PatientIntakeView: React.FC<Props> = ({ onNavigateTab, onSelectPati
         setDuration(s.duration || '2 days');
         setSeverity(s.severity || 'Moderate');
         setIntakeNotes(s.intakeNotes || '');
-        if (s.languageUsed) setLanguage(s.languageUsed);
         if (s.lifestyle) {
           setSmoking(Boolean(s.lifestyle.smoking));
           setAlcohol(Boolean(s.lifestyle.alcohol));

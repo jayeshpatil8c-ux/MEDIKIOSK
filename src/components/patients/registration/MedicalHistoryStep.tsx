@@ -12,6 +12,8 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import { VoiceLanguage } from '../../../utils/speechHelper';
+import { useLanguage } from '../../../context/LanguageContext';
+import { useQuestionVoice } from '../../../hooks/useQuestionVoice';
 
 interface Props {
   chronicConditions: string[];
@@ -56,9 +58,12 @@ export const MedicalHistoryStep: React.FC<Props> = ({
   setCurrentMedications,
   familyHistory,
   setFamilyHistory,
+  selectedLanguage,
   onBack,
   onContinue,
 }) => {
+  const { t, isVoiceEnabled: voiceEnabled } = useLanguage();
+  const { replay } = useQuestionVoice('history', t('registration.question.history'), selectedLanguage, voiceEnabled);
   const [newSurgeryProcedure, setNewSurgeryProcedure] = useState('');
   const [newSurgeryYear, setNewSurgeryYear] = useState('2020');
 
@@ -113,7 +118,7 @@ export const MedicalHistoryStep: React.FC<Props> = ({
             Step 6 of 10 • Past Medical History & Safety
           </div>
           <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight">
-            Medical History, Allergies & Prescriptions
+            {t('registration.history.title')}
           </h2>
           <p className="text-xs text-slate-500">
             Helps the clinical team verify drug safety, contraindications, and previous interventions.

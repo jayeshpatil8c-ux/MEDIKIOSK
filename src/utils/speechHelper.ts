@@ -14,6 +14,7 @@ export const LANGUAGE_CODES: Record<VoiceLanguage, string> = {
 
 // Internal cached voices list
 let cachedVoices: SpeechSynthesisVoice[] = [];
+let lastSpeech: { text: string; language: VoiceLanguage; rate: number } | null = null;
 let voiceChangeListeners: Array<() => void> = [];
 let unavailableNoticeListeners: Array<(lang: VoiceLanguage) => void> = [];
 
@@ -90,7 +91,7 @@ export function ensureVoicesLoaded(): Promise<SpeechSynthesisVoice[]> {
 
     window.speechSynthesis.addEventListener('voiceschanged', onVoices);
 
-    // Timeout fallback after 1200ms if browser already finished loading
+    // Some Chromium/Linux installations expose regional voices after a delayed voiceschanged event.
     setTimeout(() => {
       if (!resolved) {
         resolved = true;
@@ -98,8 +99,31 @@ export function ensureVoicesLoaded(): Promise<SpeechSynthesisVoice[]> {
         cachedVoices = window.speechSynthesis.getVoices();
         resolve(cachedVoices);
       }
-    }, 1200);
+    }, 3000);
   });
+}
+
+export function getAvailableVoices(): SpeechSynthesisVoice[] {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return [];
+  cachedVoices = window.speechSynthesis.getVoices() || cachedVoices;
+  return [...cachedVoices];
+}
+
+export function isSpeaking(): boolean {
+  return typeof window !== 'undefined' && 'speechSynthesis' in window && window.speechSynthesis.speaking;
+}
+
+export function pauseSpeaking(): void {
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.pause();
+}
+
+export function resumeSpeaking(): void {
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.resume();
+}
+
+export async function restartSpeaking(): Promise<SpeechResult | null> {
+  if (!lastSpeech) return null;
+  return speakText(lastSpeech.text, lastSpeech.language, lastSpeech.rate);
 }
 
 /**
@@ -362,6 +386,28 @@ export interface SpeechResult {
   error?: string;
 }
 
+function waitForMarathiVoice(): Promise<SpeechSynthesisVoice | null> {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return Promise.resolve(null);
+  const current = getBestVoice('mr-IN');
+  if (current) return Promise.resolve(current);
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      window.speechSynthesis.removeEventListener('voiceschanged', handleVoicesChanged);
+      resolve(getBestVoice('mr-IN'));
+    };
+    const handleVoicesChanged = () => {
+      cachedVoices = window.speechSynthesis.getVoices() || cachedVoices;
+      if (getBestVoice('mr-IN')) finish();
+    };
+    window.speechSynthesis.addEventListener('voiceschanged', handleVoicesChanged);
+    window.setTimeout(finish, 3000);
+  });
+}
+
 /**
  * Dedicated Marathi Text-to-Speech Function
  * Guaranteed to NEVER use English voice to speak Marathi.
@@ -384,8 +430,11 @@ export async function speakMarathi(
   // Wait for voices to be loaded
   await ensureVoicesLoaded();
 
-  // Select verified Marathi voice
-  const marathiVoice = getBestVoice('mr-IN');
+  // Refresh after delayed browser voice initialization.
+  cachedVoices = window.speechSynthesis.getVoices() || cachedVoices;
+
+  // Chromium can initially expose only English voices, then publish mr-IN asynchronously.
+  const marathiVoice = await waitForMarathiVoice();
 
   // Verify voice is genuinely Marathi-compatible
   if (!marathiVoice || !isMarathiVoice(marathiVoice)) {
@@ -402,7 +451,7 @@ export async function speakMarathi(
   return new Promise((resolve) => {
     try {
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = 'mr-IN';
+      utterance.lang = marathiVoice.lang || 'mr-IN';
       utterance.voice = marathiVoice;
       utterance.rate = rate;
       utterance.pitch = 1.0;
@@ -521,6 +570,7 @@ export async function speakText(
   language: VoiceLanguage = 'English',
   rate: number = 0.95
 ): Promise<SpeechResult> {
+  lastSpeech = { text, language, rate };
   if (language === 'Marathi') {
     return speakMarathi(text, rate);
   }
@@ -571,6 +621,17 @@ export function stopSpeaking(): void {
     window.speechSynthesis.cancel();
   }
 }
+
+export const speechService = {
+  speak: speakText,
+  pause: pauseSpeaking,
+  resume: resumeSpeaking,
+  stop: stopSpeaking,
+  restart: restartSpeaking,
+  isSpeaking,
+  getAvailableVoices,
+  getBestVoice,
+};
 
 // User-friendly speech error handler
 export function getFriendlySpeechError(rawError: string): { message: string; blocked: boolean } {
@@ -827,6 +888,7 @@ export class VoiceRecognitionService {
   private recognition: any = null;
   private isListening: boolean = false;
   private currentLanguage: VoiceLanguage = 'English';
+  private lastError: string | null = null;
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -834,13 +896,22 @@ export class VoiceRecognitionService {
       if (SpeechRecognition) {
         this.recognition = new SpeechRecognition();
         this.recognition.continuous = false;
-        this.recognition.interimResults = true;
+        this.recognition.interimResults = false;
+        this.recognition.maxAlternatives = 1;
       }
     }
   }
 
   public isSupported(): boolean {
     return Boolean(this.recognition);
+  }
+
+  public getStatus(): 'listening' | 'idle' | 'unsupported' {
+    return !this.recognition ? 'unsupported' : this.isListening ? 'listening' : 'idle';
+  }
+
+  public getLastError(): string | null {
+    return this.lastError;
   }
 
   public setLanguage(language: VoiceLanguage): void {
@@ -861,17 +932,19 @@ export class VoiceRecognitionService {
       return false;
     }
 
-    if (this.isListening) {
-      this.stop();
-    }
+    const beginRecognition = () => {
+      try {
+        this.currentLanguage = language;
+        // Explicitly configure requested locale (mr-IN for Marathi, hi-IN for Hindi, en-IN for English)
+        this.recognition.lang = LANGUAGE_CODES[language] || 'mr-IN';
+        this.isListening = true;
+        this.lastError = null;
 
-    try {
-      this.currentLanguage = language;
-      // Explicitly configure requested locale (mr-IN for Marathi, hi-IN for Hindi, en-IN for English)
-      this.recognition.lang = LANGUAGE_CODES[language] || 'mr-IN';
-      this.isListening = true;
+        this.recognition.onstart = () => {
+          this.isListening = true;
+        };
 
-      this.recognition.onresult = (event: any) => {
+        this.recognition.onresult = (event: any) => {
         let transcript = '';
         let isFinal = false;
         for (let i = event.resultIndex; i < event.results.length; ++i) {
@@ -880,26 +953,33 @@ export class VoiceRecognitionService {
             isFinal = true;
           }
         }
-        onResult({ transcript, isFinal });
-      };
+        if (transcript.trim()) onResult({ transcript: transcript.trim(), isFinal });
+        };
 
-      this.recognition.onerror = (event: any) => {
+        this.recognition.onerror = (event: any) => {
         this.isListening = false;
+        this.lastError = event.error || 'Speech input error';
         onError?.(event.error || 'Speech input error');
-      };
+        };
 
-      this.recognition.onend = () => {
+        this.recognition.onend = () => {
         this.isListening = false;
         onEnd?.();
-      };
+        };
 
-      this.recognition.start();
-      return true;
-    } catch (err: any) {
-      this.isListening = false;
-      onError?.(err.message || 'audio-capture');
-      return false;
-    }
+        this.recognition.start();
+      } catch (err: any) {
+        this.isListening = false;
+        onError?.(err.message || 'audio-capture');
+      }
+    };
+
+    if (this.isListening) this.stop();
+    // SpeechRecognition is asynchronous after stop/abort; starting in the same
+    // tick causes Chrome to throw InvalidStateError and silently lose the prompt.
+    if (typeof window !== 'undefined') window.setTimeout(beginRecognition, 120);
+    else beginRecognition();
+    return true;
   }
 
   public stop(): void {
@@ -909,6 +989,13 @@ export class VoiceRecognitionService {
       } catch {
         // ignore
       }
+      this.isListening = false;
+    }
+  }
+
+  public abort(): void {
+    if (this.recognition) {
+      try { this.recognition.abort(); } catch { /* browser may already be idle */ }
       this.isListening = false;
     }
   }

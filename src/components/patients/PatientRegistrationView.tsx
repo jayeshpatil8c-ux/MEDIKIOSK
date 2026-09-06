@@ -22,6 +22,7 @@ import {
 import { usePatients } from '../../context/PatientContext';
 import { VoiceLanguage, speakText, stopSpeaking, voiceRecognition, parseVoiceCommand } from '../../utils/speechHelper';
 import { Patient, MedicalDocument, ConsentRecord } from '../../types';
+import { useLanguage } from '../../context/LanguageContext';
 
 // Step Sub-Components
 import { LanguageSelectionStep } from './registration/LanguageSelectionStep';
@@ -36,6 +37,7 @@ import { ReviewStep } from './registration/ReviewStep';
 import { TokenSlipStep } from './registration/TokenSlipStep';
 import { MarathiVoiceDebugPanel } from './registration/MarathiVoiceDebugPanel';
 import { MarathiVoiceUnavailableModal } from './registration/MarathiVoiceUnavailableModal';
+import { buildAyurvedaCase, CarePathway, ClinicalInterviewState } from '../../utils/clinicalInterview';
 
 interface Props {
   onRegistrationComplete: (patient: Patient) => void;
@@ -50,7 +52,8 @@ export const PatientRegistrationView: React.FC<Props> = ({
   initialLanguage = 'English',
   initialVoiceEnabled = true,
 }) => {
-  const { registerPatient, patients, selectPatient } = usePatients();
+  const { registerPatient, updatePatientDemographics, updatePatientIntake, patients, setActivePatient } = usePatients();
+  const { languageName, isVoiceEnabled, setLanguage, setVoiceEnabled, t } = useLanguage();
 
   // 10-Step Sequential State Machine:
   // 1: Language Selection
@@ -66,10 +69,10 @@ export const PatientRegistrationView: React.FC<Props> = ({
   const [step, setStep] = useState<number>(1);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [registeredPatient, setRegisteredPatient] = useState<Patient | null>(null);
+  const [livePatientId, setLivePatientId] = useState<string | null>(null);
 
   // Global Language & Voice State
-  const [selectedLanguage, setSelectedLanguage] = useState<VoiceLanguage>(initialLanguage);
-  const [isVoiceEnabled, setIsVoiceEnabled] = useState<boolean>(initialVoiceEnabled);
+  const selectedLanguage = languageName;
   const [isGlobalMicListening, setIsGlobalMicListening] = useState<boolean>(false);
   const [voiceNotification, setVoiceNotification] = useState<string | null>(null);
 
@@ -77,6 +80,8 @@ export const PatientRegistrationView: React.FC<Props> = ({
   const [showDeclineModal, setShowDeclineModal] = useState<boolean>(false);
   const [showVoiceDebugPanel, setShowVoiceDebugPanel] = useState<boolean>(false);
   const [showMarathiUnavailableModal, setShowMarathiUnavailableModal] = useState<boolean>(false);
+  const setSelectedLanguage = (language: VoiceLanguage) => setLanguage(language);
+  const setIsVoiceEnabled = (enabled: boolean) => setVoiceEnabled(enabled);
 
   // Step 3: Consent Form State
   const [consentReadConfirmed, setConsentReadConfirmed] = useState<boolean>(false);
@@ -110,6 +115,15 @@ export const PatientRegistrationView: React.FC<Props> = ({
   const [hasSecondaryComplaint, setHasSecondaryComplaint] = useState<boolean>(true);
   const [secondaryComplaint, setSecondaryComplaint] = useState<string>('Sour eructations & nausea on empty stomach');
   const [urgencyScreen, setUrgencyScreen] = useState<'No' | 'Yes'>('No');
+  const [carePathway, setCarePathway] = useState<CarePathway>('allopathy');
+  const [interviewState, setInterviewState] = useState<ClinicalInterviewState>({
+    carePathway: 'allopathy',
+    complaintKey: 'other',
+    answers: {},
+    redFlags: [],
+    urgency: 'ROUTINE',
+    evidence: [],
+  });
 
   // Step 6: Medical History & Allergies
   const [chronicConditions, setChronicConditions] = useState<string[]>(['GERD / Acid Reflux']);
@@ -135,6 +149,13 @@ export const PatientRegistrationView: React.FC<Props> = ({
   useEffect(() => {
     stopSpeaking();
   }, [step]);
+
+  useEffect(() => {
+    if (initialLanguage !== languageName) setLanguage(initialLanguage);
+    if (initialVoiceEnabled !== isVoiceEnabled) setVoiceEnabled(initialVoiceEnabled);
+    // Compatibility props are applied only when this registration view mounts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Global Voice Commands Handler
   const startGlobalVoiceCommands = () => {
@@ -200,11 +221,40 @@ export const PatientRegistrationView: React.FC<Props> = ({
     }
   };
 
+  const buildDemographics = (): Patient['demographics'] => ({
+    fullName,
+    age,
+    gender,
+    dob: dob || '1992-01-01',
+    phone,
+    email: email || '',
+    address: pinCode ? `${address}, PIN: ${pinCode}` : address,
+    emergencyContact: { name: emergencyName, relationship: emergencyRelation, phone: emergencyPhone },
+    preferredLanguage: selectedLanguage,
+    registrationNumber: `REG-${Date.now().toString().slice(-6)}`,
+    abhaId: isAbhaVerified ? abhaId : undefined,
+    knownAllergies: hasAllergies === 'Yes' && knownAllergies ? [knownAllergies] : [],
+    existingConditions: chronicConditions,
+    currentMedications: currentMedications ? [currentMedications] : [],
+  });
+
+  const handleIdentityContinue = async () => {
+    if (!fullName.trim() || !phone.trim()) return;
+    if (livePatientId) { setStep(5); return; }
+    try {
+      const created = await registerPatient(buildDemographics());
+      setLivePatientId(created.id);
+      setRegisteredPatient(created);
+      setStep(5);
+    } catch (error: any) {
+      alert(error.message || 'Could not start the patient case.');
+    }
+  };
+
   // Step 9 -> Step 10: Final Confirmation and OPD Slip Generation
   const handleFinalConfirmation = () => {
     setIsSubmitting(true);
-
-    setTimeout(() => {
+    const completeCase = async () => {
       const newPatientId = `pat_${Date.now()}`;
       const tokenRandom = Math.floor(70 + Math.random() * 25);
       const generatedToken = `OPD-T${tokenRandom}`;
@@ -237,26 +287,7 @@ export const PatientRegistrationView: React.FC<Props> = ({
         id: newPatientId,
         opdToken: generatedToken,
         status: 'Waiting for Doctor',
-        demographics: {
-          fullName,
-          age,
-          gender,
-          dob: dob || '1992-01-01',
-          phone,
-          email: email || '',
-          address: pinCode ? `${address}, PIN: ${pinCode}` : address,
-          emergencyContact: {
-            name: emergencyName,
-            relationship: emergencyRelation,
-            phone: emergencyPhone,
-          },
-          preferredLanguage: selectedLanguage,
-          registrationNumber: `REG-${Date.now().toString().slice(-6)}`,
-          abhaId: isAbhaVerified ? abhaId : undefined,
-          knownAllergies: hasAllergies === 'Yes' ? [knownAllergies] : [],
-          existingConditions: chronicConditions,
-          currentMedications: currentMedications ? [currentMedications] : [],
-        },
+        demographics: buildDemographics(),
         symptoms: {
           chiefComplaint,
           symptoms: [chiefComplaint, ...(hasSecondaryComplaint && secondaryComplaint ? [secondaryComplaint] : [])],
@@ -275,6 +306,11 @@ export const PatientRegistrationView: React.FC<Props> = ({
           inputMethod: 'Voice',
           languageUsed: selectedLanguage,
           recordedAt: nowIso,
+          carePathway,
+          structuredHistory: interviewState.answers,
+          urgency: interviewState.urgency,
+          redFlagEvidence: interviewState.evidence,
+          ayurvedaCase: carePathway === 'ayurveda' ? buildAyurvedaCase(interviewState, chiefComplaint, nowIso) : undefined,
         },
         safetyAlerts:
           urgencyScreen === 'Yes'
@@ -296,13 +332,21 @@ export const PatientRegistrationView: React.FC<Props> = ({
         updatedAt: nowIso,
       };
 
-      // Register patient in Context
-      registerPatient(newPatient);
-      selectPatient(newPatient);
-      setRegisteredPatient(newPatient);
-      setIsSubmitting(false);
-      setStep(10);
-    }, 900);
+      try {
+        const patientId = livePatientId || (await registerPatient(newPatient.demographics)).id;
+        const savedPatient = await updatePatientDemographics(patientId, newPatient.demographics);
+        const completedPatient = await updatePatientIntake(savedPatient.id, newPatient.symptoms);
+        setActivePatient(completedPatient);
+        setRegisteredPatient(completedPatient);
+        setLivePatientId(completedPatient.id);
+        setIsSubmitting(false);
+        setStep(10);
+      } catch (error: any) {
+        setIsSubmitting(false);
+        alert(error.message || 'Registration could not be completed.');
+      }
+    };
+    void completeCase();
   };
 
   // Step 10: Proceed directly to Doctor Consultation
@@ -315,16 +359,16 @@ export const PatientRegistrationView: React.FC<Props> = ({
 
   // Steps metadata
   const stepsList = [
-    { id: 1, title: 'Language', icon: Globe },
-    { id: 2, title: 'Voice Setup', icon: Mic },
-    { id: 3, title: 'Consent', icon: FileText },
-    { id: 4, title: 'Identity', icon: User },
-    { id: 5, title: 'Health', icon: Stethoscope },
-    { id: 6, title: 'History', icon: Heart },
-    { id: 7, title: 'Documents', icon: FileText },
-    { id: 8, title: 'ABHA', icon: CreditCard },
-    { id: 9, title: 'Review', icon: ClipboardCheck },
-    { id: 10, title: 'Token Slip', icon: Ticket },
+    { id: 1, title: t('registration.step.language'), icon: Globe },
+    { id: 2, title: t('registration.step.voice'), icon: Mic },
+    { id: 3, title: t('registration.step.consent'), icon: FileText },
+    { id: 4, title: t('registration.step.identity'), icon: User },
+    { id: 5, title: t('registration.step.health'), icon: Stethoscope },
+    { id: 6, title: t('registration.step.history'), icon: Heart },
+    { id: 7, title: t('registration.step.documents'), icon: FileText },
+    { id: 8, title: t('registration.step.abha'), icon: CreditCard },
+    { id: 9, title: t('registration.step.review'), icon: ClipboardCheck },
+    { id: 10, title: t('registration.step.token'), icon: Ticket },
   ];
 
   return (
@@ -541,7 +585,7 @@ export const PatientRegistrationView: React.FC<Props> = ({
               setStep(5);
             }}
             onBack={() => setStep(3)}
-            onContinue={() => setStep(5)}
+            onContinue={handleIdentityContinue}
           />
         )}
 
@@ -564,6 +608,10 @@ export const PatientRegistrationView: React.FC<Props> = ({
             setSecondaryComplaint={setSecondaryComplaint}
             urgencyScreen={urgencyScreen}
             setUrgencyScreen={setUrgencyScreen}
+            carePathway={carePathway}
+            setCarePathway={(value) => { setCarePathway(value); setInterviewState((current) => ({ ...current, carePathway: value })); }}
+            interviewState={interviewState}
+            setInterviewState={(value) => { setInterviewState(value); setUrgencyScreen(value.urgency === 'IMMEDIATE' ? 'Yes' : 'No'); }}
             selectedLanguage={selectedLanguage}
             onBack={() => setStep(4)}
             onContinue={() => setStep(6)}

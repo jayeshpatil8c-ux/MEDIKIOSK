@@ -22,6 +22,7 @@ import {
   User,
 } from 'lucide-react';
 import { speakText, stopSpeaking, VoiceLanguage, VOICE_PROMPTS } from '../../utils/speechHelper';
+import { useLanguage } from '../../context/LanguageContext';
 
 // Configurable Hospital Information
 export const HOSPITAL_CONFIG = {
@@ -48,8 +49,7 @@ export const WelcomeView: React.FC<Props> = ({
   onOpenExistingPatient,
   onOpenEmergency,
 }) => {
-  const [selectedLanguage, setSelectedLanguage] = useState<VoiceLanguage>('English');
-  const [isVoiceEnabled, setIsVoiceEnabled] = useState<boolean>(true);
+  const { languageName: selectedLanguage, isVoiceEnabled, setLanguage, setVoiceEnabled } = useLanguage();
   const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
   const [showEmergencyModal, setShowEmergencyModal] = useState<boolean>(false);
   const [showHelpModal, setShowHelpModal] = useState<boolean>(false);
@@ -84,9 +84,9 @@ export const WelcomeView: React.FC<Props> = ({
   };
 
   const handleLanguageChange = (lang: VoiceLanguage) => {
-    setSelectedLanguage(lang);
+    setLanguage(lang);
     stopSpeaking();
-    handlePlayGreeting(lang);
+    if (isVoiceEnabled) void handlePlayGreeting(lang);
   };
 
   // Translations for Welcome Page
@@ -196,7 +196,7 @@ export const WelcomeView: React.FC<Props> = ({
                 stopSpeaking();
                 setIsSpeaking(false);
               } else {
-                setIsVoiceEnabled(!isVoiceEnabled);
+                setVoiceEnabled(!isVoiceEnabled);
                 if (!isVoiceEnabled) handlePlayGreeting();
               }
             }}
@@ -298,7 +298,7 @@ export const WelcomeView: React.FC<Props> = ({
             <button
               id="btn-voice-assisted-checkin"
               onClick={() => {
-                setIsVoiceEnabled(true);
+                setVoiceEnabled(true);
                 onStartRegistration(selectedLanguage, true);
               }}
               className="px-6 min-h-[58px] rounded-2xl bg-white dark:bg-slate-900 border-2 border-cyan-500/40 hover:border-cyan-500 text-cyan-600 dark:text-cyan-400 font-bold text-sm sm:text-base shadow-md flex items-center justify-center gap-2.5 transition-all"

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   User,
   Phone,
@@ -14,8 +14,9 @@ import {
   ExternalLink,
   ShieldAlert,
 } from 'lucide-react';
-import { VoiceLanguage, voiceRecognition, getFriendlySpeechError } from '../../../utils/speechHelper';
+import { VoiceLanguage, voiceRecognition, getFriendlySpeechError, parseVoiceCommand, speakText, stopSpeaking } from '../../../utils/speechHelper';
 import { Patient } from '../../../types';
+import { useLanguage } from '../../../context/LanguageContext';
 
 interface Props {
   fullName: string;
@@ -76,9 +77,78 @@ export const IdentityStep: React.FC<Props> = ({
   onBack,
   onContinue,
 }) => {
+  const { t, isVoiceEnabled } = useLanguage();
   const [duplicateMatch, setDuplicateMatch] = useState<Patient | null>(null);
   const [isListeningField, setIsListeningField] = useState<string | null>(null);
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [interviewIndex, setInterviewIndex] = useState(0);
+  const [interviewPhase, setInterviewPhase] = useState<'idle' | 'speaking' | 'listening' | 'confirming' | 'complete'>('idle');
+  const [pendingAnswer, setPendingAnswer] = useState<string | null>(null);
+  const [showKeyboardFields, setShowKeyboardFields] = useState<boolean>(true);
+  const interviewSession = useRef(0);
+
+  const interviewFields = [
+    { id: 'fullName', prompt: t('registration.question.fullName'), value: fullName },
+    { id: 'dateOfBirth', prompt: t('registration.question.dateOfBirth'), value: dob },
+    { id: 'gender', prompt: t('registration.question.gender'), value: gender },
+    { id: 'mobile', prompt: t('registration.question.mobile'), value: phone },
+    { id: 'email', prompt: t('registration.question.email'), value: email },
+    { id: 'pincode', prompt: t('registration.question.pincode'), value: pinCode },
+    { id: 'address', prompt: t('registration.question.address'), value: address },
+    { id: 'emergencyName', prompt: t('registration.question.emergencyName'), value: emergencyName },
+    { id: 'emergencyRelation', prompt: t('registration.question.emergencyRelation'), value: emergencyRelation },
+    { id: 'emergencyPhone', prompt: t('registration.question.emergencyPhone'), value: emergencyPhone },
+  ];
+  const currentInterviewField = interviewFields[interviewIndex];
+  const isInterviewMode = isVoiceEnabled && voiceRecognition.isSupported();
+  const replay = () => {
+    stopSpeaking();
+    void speakText(currentInterviewField?.prompt || t('registration.question.identity'), selectedLanguage);
+  };
+
+  const parseInterviewAnswer = (fieldId: string, transcript: string): string | null => {
+    const text = transcript.trim();
+    if (!text) return null;
+    if (['email', 'pincode', 'address'].includes(fieldId) && /\b(skip|skipped|छोड़ें|छोड़ना|वगळा|वगळणे|नको)\b/i.test(text)) return '';
+    if (fieldId === 'mobile' || fieldId === 'emergencyPhone' || fieldId === 'pincode') {
+      const digits = text.replace(/\D/g, '');
+      return digits.length >= (fieldId === 'pincode' ? 1 : 8) ? digits : null;
+    }
+    if (fieldId === 'dateOfBirth') {
+      const numbers = text.match(/\d+/g) || [];
+      if (numbers.length >= 3) {
+        const [first, second, third] = numbers.map(Number);
+        const year = third > 31 ? third : first > 31 ? first : 0;
+        const day = third > 31 ? first : second;
+        const month = third > 31 ? second : first;
+        if (year >= 1900 && month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+          return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        }
+      }
+      return null;
+    }
+    if (fieldId === 'gender') {
+      const lower = text.toLowerCase();
+      if (lower.includes('female') || lower.includes('महिला') || lower.includes('स्त्री')) return 'Female';
+      if (lower.includes('male') || lower.includes('पुरुष')) return 'Male';
+      if (lower.includes('other') || lower.includes('अन्य') || lower.includes('इतर')) return 'Other';
+      return null;
+    }
+    return text;
+  };
+
+  const applyInterviewAnswer = (fieldId: string, value: string) => {
+    if (fieldId === 'fullName') { setFullName(value); checkDuplicates(phone, value); }
+    if (fieldId === 'dateOfBirth') handleDobChange(value);
+    if (fieldId === 'gender') setGender(value as 'Male' | 'Female' | 'Other');
+    if (fieldId === 'mobile') { setPhone(value); checkDuplicates(value, fullName); }
+    if (fieldId === 'email') setEmail(value);
+    if (fieldId === 'pincode') setPinCode(value);
+    if (fieldId === 'address') setAddress(value);
+    if (fieldId === 'emergencyName') setEmergencyName(value);
+    if (fieldId === 'emergencyRelation') setEmergencyRelation(value);
+    if (fieldId === 'emergencyPhone') setEmergencyPhone(value);
+  };
 
   // 2-Way Automatic Recalculation between DOB and Age
   const handleDobChange = (newDob: string) => {
@@ -175,13 +245,107 @@ export const IdentityStep: React.FC<Props> = ({
     );
   };
 
+  const commitInterviewAnswer = () => {
+    if (!currentInterviewField || pendingAnswer === null) return;
+    applyInterviewAnswer(currentInterviewField.id, pendingAnswer);
+    setPendingAnswer(null);
+    if (interviewIndex >= interviewFields.length - 1) {
+      setInterviewPhase('complete');
+      return;
+    }
+    setInterviewIndex((index) => index + 1);
+  };
+
+  const skipOptionalInterviewField = () => {
+    if (!currentInterviewField || !['pincode', 'address', 'email'].includes(currentInterviewField.id)) return;
+    setPendingAnswer('');
+    applyInterviewAnswer(currentInterviewField.id, '');
+    setPendingAnswer(null);
+    if (interviewIndex >= interviewFields.length - 1) {
+      setInterviewPhase('complete');
+    } else {
+      setInterviewIndex((index) => index + 1);
+    }
+  };
+
+  const startInterviewListening = (session: number, fieldId: string, confirming: boolean) => {
+    if (session !== interviewSession.current || !voiceRecognition.isSupported()) return;
+    setInterviewPhase(confirming ? 'confirming' : 'listening');
+    voiceRecognition.startListening(
+      selectedLanguage,
+      (result) => {
+        if (session !== interviewSession.current || !result.transcript.trim()) return;
+        voiceRecognition.stop();
+        if (confirming) {
+          const command = parseVoiceCommand(result.transcript, selectedLanguage);
+          if (command === 'CONFIRM') commitInterviewAnswer();
+          else if (command === 'CANCEL') {
+            setPendingAnswer(null);
+            setInterviewPhase('listening');
+            startInterviewListening(session, fieldId, false);
+          }
+          return;
+        }
+        const parsed = parseInterviewAnswer(fieldId, result.transcript);
+        if (parsed === null) {
+          setVoiceError(t('registration.answer.invalid'));
+          setInterviewPhase('listening');
+          startInterviewListening(session, fieldId, false);
+          return;
+        }
+        setPendingAnswer(parsed);
+        setInterviewPhase('confirming');
+        const confirmation = t('registration.answer.confirm').replace('{answer}', parsed || t('common.skip', 'skipped'));
+        void speakText(confirmation, selectedLanguage).then(() => startInterviewListening(session, fieldId, true));
+      },
+      (error) => {
+        if (session !== interviewSession.current) return;
+        setVoiceError(getFriendlySpeechError(error).message);
+        setInterviewPhase('idle');
+      },
+    );
+  };
+
+  useEffect(() => {
+    if (!isInterviewMode || !currentInterviewField) return;
+    const session = ++interviewSession.current;
+    voiceRecognition.abort();
+    stopSpeaking();
+    setPendingAnswer(null);
+    setVoiceError(null);
+    setInterviewPhase('speaking');
+    const timer = window.setTimeout(() => {
+      void speakText(currentInterviewField.prompt, selectedLanguage).then(() => {
+        if (session !== interviewSession.current) return;
+        startInterviewListening(session, currentInterviewField.id, false);
+      });
+    }, 180);
+    return () => {
+      window.clearTimeout(timer);
+      if (session === interviewSession.current) {
+        interviewSession.current += 1;
+        voiceRecognition.abort();
+        stopSpeaking();
+      }
+    };
+  }, [interviewIndex, selectedLanguage, isInterviewMode]);
+
+  useEffect(() => {
+    if (!isInterviewMode) {
+      interviewSession.current += 1;
+      voiceRecognition.abort();
+      stopSpeaking();
+      setInterviewPhase('idle');
+    }
+  }, [isInterviewMode]);
+
   const handleValidateAndContinue = () => {
     if (!fullName.trim()) {
-      alert('Please enter patient full name.');
+      alert(t('registration.identity.fullName', 'Please enter patient full name.'));
       return;
     }
     if (!phone.trim()) {
-      alert('Please enter patient mobile number.');
+      alert(t('registration.identity.mobile', 'Please enter patient mobile number.'));
       return;
     }
     onContinue();
@@ -197,11 +361,14 @@ export const IdentityStep: React.FC<Props> = ({
             Step 4 of 10 • Patient Identity & Duplicate Check
           </div>
           <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight">
-            Patient Personal & Demographics Details
+            {t('registration.identity.title')}
           </h2>
           <p className="text-xs text-slate-500">
-            Touch to type or speak into any field. Real-time duplicate detection protects your existing file.
+            {t('registration.identity.subtitle')}
           </p>
+          <button type="button" onClick={replay} className="mt-2 text-xs font-semibold text-cyan-600 dark:text-cyan-400" aria-label={t('common.readAgain')}>
+            {t('common.readAgain')}
+          </button>
         </div>
       </div>
 
@@ -219,7 +386,7 @@ export const IdentityStep: React.FC<Props> = ({
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-center gap-2 font-bold text-sm text-amber-900 dark:text-amber-300">
               <ShieldAlert className="w-5 h-5 text-amber-600 flex-shrink-0" />
-              <span>Existing Hospital Patient Record Found!</span>
+              <span>{t('registration.identity.duplicate')}</span>
             </div>
             <span className="font-mono text-[11px] font-bold bg-amber-500/20 px-2 py-0.5 rounded">
               Token: {duplicateMatch.opdToken}
@@ -238,7 +405,7 @@ export const IdentityStep: React.FC<Props> = ({
                 className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm"
               >
                 <ExternalLink className="w-3.5 h-3.5" />
-                <span>Open Existing Patient File</span>
+                <span>{t('registration.identity.openFile')}</span>
               </button>
             )}
             <button
@@ -246,18 +413,63 @@ export const IdentityStep: React.FC<Props> = ({
               onClick={() => setDuplicateMatch(null)}
               className="px-3.5 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-bold text-xs"
             >
-              Continue as New Visit / Registration
+              {t('registration.identity.newVisit')}
             </button>
           </div>
         </div>
       )}
 
+      {isInterviewMode && currentInterviewField && (
+        <div className="max-w-2xl mx-auto space-y-5 rounded-3xl border border-cyan-500/30 bg-cyan-500/5 p-6 sm:p-8 text-center">
+          <div className="text-xs font-bold uppercase tracking-wider text-cyan-600 dark:text-cyan-400">
+            Question {interviewIndex + 1} of {interviewFields.length}
+          </div>
+          <h3 className="text-2xl font-black text-slate-900 dark:text-white">{currentInterviewField.prompt}</h3>
+          <div className="text-xs font-semibold text-slate-500">
+            {interviewPhase === 'speaking' && 'Speaking...'}
+            {interviewPhase === 'listening' && 'Listening...'}
+            {interviewPhase === 'confirming' && 'Please confirm your answer'}
+            {interviewPhase === 'complete' && 'All identity details captured'}
+          </div>
+          {pendingAnswer !== null && (
+            <div className="rounded-2xl bg-white/70 dark:bg-slate-900/70 p-4 text-left text-sm text-slate-800 dark:text-slate-200">
+              <span className="block text-xs font-bold text-slate-500">You said</span>
+              {pendingAnswer || 'Skipped'}
+            </div>
+          )}
+          {voiceError && <div className="text-xs text-amber-600 dark:text-amber-400">{voiceError}</div>}
+          <div className="flex flex-wrap justify-center gap-3">
+            {interviewPhase === 'confirming' ? (
+              <>
+                <button type="button" onClick={commitInterviewAnswer} className="min-h-[48px] rounded-2xl bg-emerald-600 px-6 py-3 text-sm font-bold text-white">Yes, continue</button>
+                <button type="button" onClick={() => { setPendingAnswer(null); startInterviewListening(interviewSession.current, currentInterviewField.id, false); }} className="min-h-[48px] rounded-2xl bg-slate-200 px-6 py-3 text-sm font-bold text-slate-800 dark:bg-slate-800 dark:text-white">No, try again</button>
+              </>
+            ) : interviewPhase === 'complete' ? (
+              <button type="button" onClick={handleValidateAndContinue} className="min-h-[48px] rounded-2xl bg-cyan-600 px-7 py-3 text-sm font-bold text-white">Continue to Health Questions</button>
+            ) : (
+              <button type="button" onClick={() => { voiceRecognition.abort(); startInterviewListening(interviewSession.current, currentInterviewField.id, false); }} className="min-h-[48px] rounded-2xl bg-cyan-600 px-7 py-3 text-sm font-bold text-white">
+                {interviewPhase === 'listening' ? 'Listening...' : 'Start Listening'}
+              </button>
+            )}
+            {['pincode', 'address', 'email'].includes(currentInterviewField.id) && interviewPhase !== 'complete' && (
+              <button type="button" onClick={skipOptionalInterviewField} className="min-h-[48px] rounded-2xl border border-slate-300 px-5 py-3 text-sm font-bold text-slate-700 dark:border-slate-600 dark:text-slate-200">
+                Skip optional field
+              </button>
+            )}
+            <button type="button" onClick={replay} className="min-h-[48px] rounded-2xl border border-cyan-500 px-5 py-3 text-sm font-bold text-cyan-700 dark:text-cyan-300">Read Again</button>
+            <button type="button" onClick={() => setShowKeyboardFields(true)} className="min-h-[48px] rounded-2xl border border-slate-300 px-5 py-3 text-sm font-bold text-slate-700 dark:border-slate-600 dark:text-slate-200">Enter with keyboard</button>
+          </div>
+        </div>
+      )}
+
       {/* Form Fields Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 text-xs">
+      {showKeyboardFields && <div className="space-y-3">
+        {isInterviewMode && <div className="flex items-center justify-between rounded-2xl bg-slate-50 dark:bg-slate-800/60 px-4 py-3 text-xs text-slate-600 dark:text-slate-300"><span>Keyboard and touch entry are available for every field.</span><button type="button" onClick={() => setShowKeyboardFields(false)} className="font-bold text-cyan-600 dark:text-cyan-400">Hide keyboard form</button></div>}
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 text-xs">
         {/* Full Name with Voice Mic */}
         <div className="md:col-span-2">
           <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-            Full Name *
+            {t('registration.identity.fullName')} *
           </label>
           <div className="relative flex items-center">
             <input
@@ -290,7 +502,7 @@ export const IdentityStep: React.FC<Props> = ({
         {/* Gender */}
         <div>
           <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-            Gender *
+            {t('registration.identity.gender')} *
           </label>
           <select
             value={gender}
@@ -298,16 +510,16 @@ export const IdentityStep: React.FC<Props> = ({
             onChange={(e: any) => setGender(e.target.value)}
             className="w-full px-3.5 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800 text-slate-900 dark:text-white font-medium focus:outline-none"
           >
-            <option value="Male">Male</option>
-            <option value="Female">Female</option>
-            <option value="Other">Other</option>
+            <option value="Male">{t('registration.identity.male')}</option>
+            <option value="Female">{t('registration.identity.female')}</option>
+            <option value="Other">{t('registration.identity.other')}</option>
           </select>
         </div>
 
         {/* Date of Birth (2-way recalculation) */}
         <div>
           <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-            Date of Birth
+            {t('registration.identity.dateOfBirth')}
           </label>
           <input
             type="date"
@@ -321,7 +533,7 @@ export const IdentityStep: React.FC<Props> = ({
         {/* Age (Years) (2-way recalculation) */}
         <div>
           <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-            Age (Years) *
+            {t('registration.identity.age')} *
           </label>
           <input
             type="number"
@@ -337,7 +549,7 @@ export const IdentityStep: React.FC<Props> = ({
         {/* Mobile Number with onBlur duplicate check and Voice Mic */}
         <div>
           <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-            Mobile Number *
+            {t('registration.identity.mobile')} *
           </label>
           <div className="relative flex items-center">
             <input
@@ -368,7 +580,7 @@ export const IdentityStep: React.FC<Props> = ({
         {/* Email */}
         <div>
           <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-            Email Address (Optional)
+            {t('registration.identity.email')} ({t('registration.identity.optional', 'Optional')})
           </label>
           <input
             type="email"
@@ -383,7 +595,7 @@ export const IdentityStep: React.FC<Props> = ({
         {/* PIN Code */}
         <div>
           <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-            Postal PIN Code
+            {t('registration.identity.pincode')} <span className="font-normal text-slate-400">(Optional)</span>
           </label>
           <input
             type="text"
@@ -399,7 +611,7 @@ export const IdentityStep: React.FC<Props> = ({
         {/* Address */}
         <div className="md:col-span-3">
           <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-            Residential Address (Locality, City, State)
+            {t('registration.identity.address')} <span className="font-normal text-slate-400">(Optional)</span>
           </label>
           <div className="relative flex items-center">
             <input
@@ -428,7 +640,7 @@ export const IdentityStep: React.FC<Props> = ({
         {/* Emergency Contact Header */}
         <div className="md:col-span-3 pt-2">
           <span className="text-xs font-bold text-cyan-600 dark:text-cyan-400 uppercase tracking-wider block mb-2">
-            Emergency Contact Person
+            {t('registration.identity.emergencyName')}
           </span>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
@@ -457,7 +669,7 @@ export const IdentityStep: React.FC<Props> = ({
             </div>
             <div>
               <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                Emergency Phone
+                {t('registration.identity.emergencyPhone')}
               </label>
               <input
                 type="tel"
@@ -469,7 +681,8 @@ export const IdentityStep: React.FC<Props> = ({
             </div>
           </div>
         </div>
-      </div>
+        </div>
+      </div>}
 
       {/* Navigation */}
       <div className="flex items-center justify-between pt-4 border-t border-slate-100 dark:border-slate-800">

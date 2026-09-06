@@ -1,392 +1,95 @@
-import React, { useState } from 'react';
-import {
-  Stethoscope,
-  AlertTriangle,
-  Flame,
-  Activity,
-  HeartCrack,
-  Clock,
-  Mic,
-  ArrowRight,
-  ArrowLeft,
-  ShieldAlert,
-  HelpCircle,
-  Volume2,
-} from 'lucide-react';
-import { VoiceLanguage, voiceRecognition, getFriendlySpeechError, speakText } from '../../../utils/speechHelper';
+import React, { useEffect, useMemo, useState } from 'react';
+import { ArrowLeft, ArrowRight, CheckCircle2, Mic, ShieldAlert, Volume2 } from 'lucide-react';
+import { useLanguage } from '../../../context/LanguageContext';
+import { VoiceLanguage, getFriendlySpeechError, speakText, voiceRecognition } from '../../../utils/speechHelper';
+import { CarePathway, COMPLAINT_OPTIONS, ClinicalInterviewState, evaluateUrgency, getInterviewQuestions, normalizeComplaint } from '../../../utils/clinicalInterview';
+import { useQuestionVoice } from '../../../hooks/useQuestionVoice';
 
 interface Props {
-  reasonForVisit: 'unwell' | 'followup' | 'review' | 'routine';
-  setReasonForVisit: (val: 'unwell' | 'followup' | 'review' | 'routine') => void;
-  chiefComplaint: string;
-  setChiefComplaint: (val: string) => void;
-  symptomDuration: string;
-  setSymptomDuration: (val: string) => void;
-  symptomSeverity: 'Mild' | 'Moderate' | 'Severe';
-  setSymptomSeverity: (val: 'Mild' | 'Moderate' | 'Severe') => void;
-  symptomLocation: string;
-  setSymptomLocation: (val: string) => void;
-  hasSecondaryComplaint: boolean;
-  setHasSecondaryComplaint: (val: boolean) => void;
-  secondaryComplaint: string;
-  setSecondaryComplaint: (val: string) => void;
-  urgencyScreen: 'No' | 'Yes';
-  setUrgencyScreen: (val: 'No' | 'Yes') => void;
-  selectedLanguage: VoiceLanguage;
-  onBack: () => void;
-  onContinue: () => void;
+  reasonForVisit: 'unwell' | 'followup' | 'review' | 'routine'; setReasonForVisit: (value: 'unwell' | 'followup' | 'review' | 'routine') => void;
+  chiefComplaint: string; setChiefComplaint: (value: string) => void;
+  symptomDuration: string; setSymptomDuration: (value: string) => void;
+  symptomSeverity: 'Mild' | 'Moderate' | 'Severe'; setSymptomSeverity: (value: 'Mild' | 'Moderate' | 'Severe') => void;
+  symptomLocation: string; setSymptomLocation: (value: string) => void;
+  hasSecondaryComplaint: boolean; setHasSecondaryComplaint: (value: boolean) => void;
+  secondaryComplaint: string; setSecondaryComplaint: (value: string) => void;
+  urgencyScreen: 'No' | 'Yes'; setUrgencyScreen: (value: 'No' | 'Yes') => void;
+  selectedLanguage: VoiceLanguage; onBack: () => void; onContinue: () => void;
+  carePathway: CarePathway; setCarePathway: (value: CarePathway) => void;
+  interviewState: ClinicalInterviewState; setInterviewState: (value: ClinicalInterviewState) => void;
 }
 
-export const AdaptiveHealthStep: React.FC<Props> = ({
-  reasonForVisit,
-  setReasonForVisit,
-  chiefComplaint,
-  setChiefComplaint,
-  symptomDuration,
-  setSymptomDuration,
-  symptomSeverity,
-  setSymptomSeverity,
-  symptomLocation,
-  setSymptomLocation,
-  hasSecondaryComplaint,
-  setHasSecondaryComplaint,
-  secondaryComplaint,
-  setSecondaryComplaint,
-  urgencyScreen,
-  setUrgencyScreen,
-  selectedLanguage,
-  onBack,
-  onContinue,
-}) => {
-  const [activeBranch, setActiveBranch] = useState<'gastric' | 'fever' | 'headache' | 'chest' | 'custom'>('gastric');
-  const [isListening, setIsListening] = useState<boolean>(false);
-  const [voiceNote, setVoiceNote] = useState<string | null>(null);
+const yesNo = ['Yes', 'No'];
 
-  // Common symptom presets for rapid touch
-  const symptomPresets = [
-    {
-      id: 'gastric' as const,
-      label: 'Abdominal / Stomach Pain & Acidity',
-      icon: Flame,
-      defaultComplaint: 'Epigastric stomach pain, sour eructations, and burning sensation (Gastritis)',
-      defaultLocation: 'Upper abdomen / Epigastrium',
-      isRedFlag: false,
-    },
-    {
-      id: 'fever' as const,
-      label: 'Fever, Chills & Body Ache',
-      icon: Activity,
-      defaultComplaint: 'High grade fever with chills and generalized body weakness',
-      defaultLocation: 'Generalized / Forehead',
-      isRedFlag: false,
-    },
-    {
-      id: 'headache' as const,
-      label: 'Severe Headache / Migraine',
-      icon: HelpCircle,
-      defaultComplaint: 'Throbbing frontal headache, nausea, and sensitivity to bright light',
-      defaultLocation: 'Frontal / Temporal region',
-      isRedFlag: false,
-    },
-    {
-      id: 'chest' as const,
-      label: 'Chest Discomfort / Heaviness',
-      icon: HeartCrack,
-      defaultComplaint: 'Substernal chest heaviness, pressure, and shortness of breath',
-      defaultLocation: 'Center of chest / Retrosternal',
-      isRedFlag: true,
-    },
-  ];
+export const AdaptiveHealthStep: React.FC<Props> = (props) => {
+  const { isVoiceEnabled } = useLanguage();
+  const [mode, setMode] = useState<'pathway' | 'complaint' | 'questions'>('pathway');
+  const [questionIndex, setQuestionIndex] = useState(0);
+  const [value, setValue] = useState('');
+  const [listening, setListening] = useState(false);
+  const [notice, setNotice] = useState('');
+  const questions = useMemo(() => getInterviewQuestions(props.interviewState.complaintKey, props.carePathway), [props.interviewState.complaintKey, props.carePathway]);
+  const question = questions[questionIndex];
+  const questionText = question?.text[props.selectedLanguage] || question?.text.English || '';
+  useQuestionVoice(question ? `${props.interviewState.complaintKey}-${question.id}` : `complaint-${mode}`, questionText, props.selectedLanguage, isVoiceEnabled && mode === 'questions', setNotice);
 
-  const handleSelectPreset = (preset: typeof symptomPresets[0]) => {
-    setActiveBranch(preset.id);
-    setChiefComplaint(preset.defaultComplaint);
-    setSymptomLocation(preset.defaultLocation);
-    if (preset.isRedFlag) {
-      setUrgencyScreen('Yes');
-    }
+  useEffect(() => { if (question) { const answer = props.interviewState.answers[question.id]; setValue(Array.isArray(answer) ? answer.join(', ') : String(answer || '')); } }, [question, props.interviewState.answers]);
+
+  const updateAnswer = (answer: string | string[]) => {
+    if (!question) return;
+    const answers = { ...props.interviewState.answers, [question.id]: answer };
+    const risk = evaluateUrgency(props.interviewState.complaintKey, answers);
+    props.setInterviewState({ ...props.interviewState, answers, ...risk });
+    if (question.id === 'onset' || question.id.endsWith('_onset')) props.setSymptomDuration(String(answer));
+    if (question.id === 'severity') props.setSymptomSeverity(Number(answer) >= 8 ? 'Severe' : Number(answer) >= 5 ? 'Moderate' : 'Mild');
+    if (question.id === 'site' || question.id.endsWith('_site')) props.setSymptomLocation(String(answer));
+    setValue(Array.isArray(answer) ? answer.join(', ') : answer);
   };
-
-  const handleVoiceInput = () => {
-    setVoiceNote(null);
-    if (!voiceRecognition.isSupported()) {
-      setVoiceNote('Speech recognition is not available in this browser.');
-      return;
-    }
-
-    if (isListening) {
-      voiceRecognition.stop();
-      setIsListening(false);
-      return;
-    }
-
-    setIsListening(true);
-    setVoiceNote('Listening... Please describe your symptoms clearly.');
-
-    voiceRecognition.startListening(
-      selectedLanguage,
-      (result) => {
-        setChiefComplaint(result.transcript);
-        setVoiceNote(`Captured: "${result.transcript}"`);
-        setIsListening(false);
-        voiceRecognition.stop();
-      },
-      (err) => {
-        const friendly = getFriendlySpeechError(err);
-        setVoiceNote(friendly.message);
-        setIsListening(false);
-      }
-    );
+  const nextQuestion = () => {
+    if (question?.required && !value.trim()) { setNotice(props.selectedLanguage === 'Marathi' ? 'कृपया उत्तर द्या.' : props.selectedLanguage === 'Hindi' ? 'कृपया उत्तर दें।' : 'Please provide an answer.'); return; }
+    setNotice(''); if (questionIndex < questions.length - 1) setQuestionIndex((index) => index + 1); else props.onContinue();
   };
-
-  return (
-    <div className="space-y-6 animate-fadeIn">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3">
-        <div>
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/30 text-cyan-600 dark:text-cyan-400 text-xs font-bold uppercase tracking-wider mb-1">
-            <Stethoscope className="w-3.5 h-3.5" />
-            Step 5 of 10 • Adaptive Health Questions
-          </div>
-          <div className="flex items-center gap-2">
-            <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight">
-              {selectedLanguage === 'Marathi'
-                ? 'आरोग्य समस्या व लक्षणे'
-                : selectedLanguage === 'Hindi'
-                ? 'स्वास्थ्य समस्या और लक्षण'
-                : 'Reason for Visit & Symptom Assessment'}
-            </h2>
-            <button
-              type="button"
-              onClick={() => {
-                const q =
-                  selectedLanguage === 'Marathi'
-                    ? 'तुम्हाला सध्या कोणती समस्या जाणवत आहे?'
-                    : selectedLanguage === 'Hindi'
-                    ? 'आपको वर्तमान में कौन सी समस्या महसूस हो रही है?'
-                    : 'What health symptoms are you experiencing today?';
-                speakText(q, selectedLanguage);
-              }}
-              className="p-1.5 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-600 dark:text-cyan-400 transition-colors"
-              title="Hear question aloud"
-            >
-              <Volume2 className="w-4 h-4" />
-            </button>
-          </div>
-          <p className="text-xs text-slate-500">
-            {selectedLanguage === 'Marathi'
-              ? 'तुम्हाला सध्या कोणती समस्या जाणवत आहे? मुख्य लक्षण निवडा किंवा बोला.'
-              : 'Select your main symptom category or describe your discomfort using voice dictation.'}
-          </p>
-        </div>
-
-        {/* Voice Dictation Button */}
-        <button
-          type="button"
-          onClick={handleVoiceInput}
-          className={`px-3.5 py-2 rounded-2xl text-xs font-bold border transition-all flex items-center gap-2 ${
-            isListening
-              ? 'bg-rose-500 text-white border-rose-600 animate-pulse'
-              : 'bg-cyan-500/10 border-cyan-500/30 text-cyan-600 dark:text-cyan-400'
-          }`}
-        >
-          <Mic className="w-4 h-4" />
-          <span>{isListening ? 'Listening...' : 'Speak Symptoms'}</span>
-        </button>
-      </div>
-
-      {voiceNote && (
-        <div className="p-3 rounded-2xl bg-cyan-50 dark:bg-cyan-950/40 border border-cyan-200 dark:border-cyan-800 text-xs text-cyan-800 dark:text-cyan-300">
-          {voiceNote}
-        </div>
-      )}
-
-      {/* Immediate RED FLAG Warning for Chest Discomfort */}
-      {(activeBranch === 'chest' || urgencyScreen === 'Yes') && (
-        <div className="p-4 rounded-3xl bg-rose-500/15 border-2 border-rose-500/40 text-rose-950 dark:text-rose-200 text-xs space-y-2">
-          <div className="flex items-center gap-2 font-bold text-sm text-rose-700 dark:text-rose-300">
-            <ShieldAlert className="w-5 h-5 text-rose-600 flex-shrink-0 animate-pulse" />
-            <span>CLINICAL RED FLAG: Immediate Triage Required</span>
-          </div>
-          <p className="leading-relaxed text-rose-900 dark:text-rose-200">
-            Sudden chest discomfort, retrosternal pain, or breathlessness requires urgent assessment. A high-priority Triage Alert is flagged on the Nurse and Doctor monitors. If symptoms are worsening, please notify the nearby hospital attendant immediately.
-          </p>
-        </div>
-      )}
-
-      {/* Symptom Category Preset Buttons */}
-      <div className="space-y-2">
-        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">
-          Select Primary Symptom Category
-        </label>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          {symptomPresets.map((preset) => {
-            const Icon = preset.icon;
-            const isSelected = activeBranch === preset.id;
-            return (
-              <button
-                key={preset.id}
-                type="button"
-                onClick={() => handleSelectPreset(preset)}
-                className={`p-4 rounded-2xl border-2 text-left transition-all flex flex-col justify-between ${
-                  isSelected
-                    ? preset.isRedFlag
-                      ? 'border-rose-500 bg-rose-500/10 shadow-md ring-2 ring-rose-400'
-                      : 'border-cyan-500 bg-cyan-500/10 shadow-md ring-2 ring-cyan-400'
-                    : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-slate-300'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <div
-                    className={`w-9 h-9 rounded-xl flex items-center justify-center ${
-                      preset.isRedFlag
-                        ? 'bg-rose-500/20 text-rose-600'
-                        : 'bg-cyan-500/20 text-cyan-600 dark:text-cyan-400'
-                    }`}
-                  >
-                    <Icon className="w-5 h-5" />
-                  </div>
-                  {isSelected && (
-                    <span className="text-[10px] font-bold text-cyan-600 dark:text-cyan-400">
-                      Active
-                    </span>
-                  )}
-                </div>
-                <div className="font-extrabold text-xs text-slate-900 dark:text-white">
-                  {preset.label}
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Chief Complaint Description Box */}
-      <div className="space-y-1.5 text-xs">
-        <label className="block font-bold text-slate-700 dark:text-slate-300">
-          Chief Complaint Description *
-        </label>
-        <textarea
-          rows={3}
-          value={chiefComplaint}
-          onChange={(e) => setChiefComplaint(e.target.value)}
-          placeholder="Describe what feels uncomfortable, when it started, and what makes it better or worse..."
-          className="w-full p-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800 text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-cyan-500"
-        />
-      </div>
-
-      {/* Severity and Duration Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
-        {/* Severity Selection */}
-        <div>
-          <label className="block font-bold text-slate-700 dark:text-slate-300 mb-2">
-            Symptom Severity
-          </label>
-          <div className="grid grid-cols-3 gap-2">
-            {(['Mild', 'Moderate', 'Severe'] as const).map((sev) => (
-              <button
-                key={sev}
-                type="button"
-                onClick={() => setSymptomSeverity(sev)}
-                className={`py-2.5 rounded-xl font-bold text-xs border transition-all ${
-                  symptomSeverity === sev
-                    ? sev === 'Severe'
-                      ? 'bg-rose-600 text-white border-rose-600 shadow-sm'
-                      : sev === 'Moderate'
-                      ? 'bg-amber-600 text-white border-amber-600 shadow-sm'
-                      : 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
-                    : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
-                }`}
-              >
-                {sev}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Duration Selection */}
-        <div>
-          <label className="block font-bold text-slate-700 dark:text-slate-300 mb-2">
-            Duration
-          </label>
-          <div className="grid grid-cols-4 gap-1.5">
-            {['Hours', '1-3 Days', '1-2 Weeks', '1+ Month'].map((dur) => (
-              <button
-                key={dur}
-                type="button"
-                onClick={() => setSymptomDuration(dur)}
-                className={`py-2.5 rounded-xl font-bold text-[11px] border transition-all ${
-                  symptomDuration === dur
-                    ? 'bg-cyan-600 text-white border-cyan-600 shadow-sm'
-                    : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
-                }`}
-              >
-                {dur}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Symptom Site */}
-        <div>
-          <label className="block font-bold text-slate-700 dark:text-slate-300 mb-2">
-            Specific Location / Body Area
-          </label>
-          <input
-            type="text"
-            value={symptomLocation}
-            onChange={(e) => setSymptomLocation(e.target.value)}
-            placeholder="e.g. Upper abdomen / right flank"
-            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none"
-          />
-        </div>
-      </div>
-
-      {/* Secondary Symptom Toggle */}
-      <div className="pt-2">
-        <label className="flex items-center gap-2.5 cursor-pointer text-xs font-semibold text-slate-700 dark:text-slate-300">
-          <input
-            type="checkbox"
-            checked={hasSecondaryComplaint}
-            onChange={(e) => setHasSecondaryComplaint(e.target.checked)}
-            className="rounded text-cyan-600 focus:ring-cyan-500 w-4 h-4"
-          />
-          <span>I have an additional symptom or complaint to report</span>
-        </label>
-
-        {hasSecondaryComplaint && (
-          <div className="mt-2 text-xs">
-            <input
-              type="text"
-              placeholder="e.g. Nausea and loss of appetite for 2 days"
-              value={secondaryComplaint}
-              onChange={(e) => setSecondaryComplaint(e.target.value)}
-              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none"
-            />
-          </div>
-        )}
-      </div>
-
-      {/* Navigation */}
-      <div className="flex items-center justify-between pt-4 border-t border-slate-100 dark:border-slate-800">
-        <button
-          type="button"
-          onClick={onBack}
-          className="px-4 py-2.5 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 flex items-center gap-1.5"
-        >
-          <ArrowLeft className="w-3.5 h-3.5" /> Back to Identity
-        </button>
-
-        <button
-          type="button"
-          id="btn-health-continue"
-          onClick={onContinue}
-          className="px-7 py-3 rounded-2xl bg-cyan-600 hover:bg-cyan-500 text-white font-extrabold text-xs sm:text-sm flex items-center gap-2 shadow-lg shadow-cyan-600/25 transition-all"
-        >
-          <span>Continue to Medical History & Allergies</span>
-          <ArrowRight className="w-4 h-4" />
-        </button>
-      </div>
-    </div>
-  );
+  const applyVoiceAnswer = (transcript: string) => {
+    if (!question) return;
+    const normalized = transcript.trim().toLowerCase();
+    if (question.inputType === 'yes_no') {
+      const yes = ['yes', 'हो', 'होय', 'हाँ', 'हां'].some((word) => normalized.includes(word));
+      const no = ['no', 'नाही', 'नहीं', 'नको'].some((word) => normalized.includes(word));
+      if (yes !== no) { updateAnswer(yes ? 'Yes' : 'No'); return; }
+    }
+    if (question.inputType === 'single_choice' || question.inputType === 'multi_choice') {
+      const matches = (question.options || []).filter((option) => normalized.includes(option.toLowerCase()));
+      if (matches.length) { updateAnswer(question.inputType === 'multi_choice' ? matches : matches[0]); return; }
+    }
+    updateAnswer(transcript);
+  };
+  const captureVoice = () => {
+    if (!voiceRecognition.isSupported()) { setNotice('Voice input is unavailable on this device. You can type or tap to continue.'); return; }
+    if (listening) { voiceRecognition.stop(); setListening(false); return; }
+    setListening(true); setNotice('Listening...');
+    voiceRecognition.startListening(props.selectedLanguage, (result) => { if (mode === 'complaint') props.setChiefComplaint(result.transcript); else applyVoiceAnswer(result.transcript); setListening(false); voiceRecognition.stop(); setNotice('Captured. Please confirm or edit your answer.'); }, (error) => { setListening(false); setNotice(getFriendlySpeechError(error).message); });
+  };
+  const chooseComplaint = (key: string, label: string) => {
+    const normalized = key === 'other' ? normalizeComplaint(props.chiefComplaint) : key;
+    props.setChiefComplaint(props.chiefComplaint || label);
+    props.setInterviewState({ ...props.interviewState, complaintKey: normalized }); setMode('questions'); setQuestionIndex(0); setValue('');
+  };
+  const renderInput = () => {
+    if (!question) return null;
+    if (question.inputType === 'yes_no') return <div className="grid grid-cols-2 gap-3">{yesNo.map((option) => <button key={option} type="button" onClick={() => { updateAnswer(option); setTimeout(nextQuestion, 0); }} className={`py-4 rounded-2xl border-2 font-black ${value === option ? 'bg-cyan-600 text-white border-cyan-600' : 'border-slate-200 dark:border-slate-700'}`}>{option}</button>)}</div>;
+    if (question.inputType === 'single_choice') return <div className="grid grid-cols-2 gap-3">{question.options?.map((option) => <button key={option} type="button" onClick={() => { updateAnswer(option); setTimeout(nextQuestion, 0); }} className={`p-4 rounded-2xl border-2 text-left font-bold ${value === option ? 'bg-cyan-600 text-white border-cyan-600' : 'border-slate-200 dark:border-slate-700'}`}>{option}</button>)}</div>;
+    if (question.inputType === 'multi_choice') {
+      const selected = value ? value.split(', ').filter(Boolean) : [];
+      return <div className="space-y-3"><div className="grid grid-cols-2 gap-3">{question.options?.map((option) => <button key={option} type="button" onClick={() => updateAnswer(selected.includes(option) ? selected.filter((item) => item !== option) : [...selected, option])} className={`p-4 rounded-2xl border-2 text-left font-bold ${selected.includes(option) ? 'bg-cyan-600 text-white border-cyan-600' : 'border-slate-200 dark:border-slate-700'}`}>{option}</button>)}</div><button type="button" onClick={nextQuestion} className="w-full py-4 rounded-2xl bg-cyan-600 text-white font-black">Continue <ArrowRight className="inline w-4 h-4" /></button></div>;
+    }
+    return <div className="space-y-3"><div className="flex gap-2"><input autoFocus type={question.inputType === 'number' ? 'number' : 'text'} min={question.inputType === 'number' ? 0 : undefined} max={question.inputType === 'number' ? 10 : undefined} value={value} onChange={(event) => updateAnswer(event.target.value)} placeholder={question.inputType === 'number' ? '0–10' : 'Type your answer'} className="flex-1 px-4 py-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800" /><button type="button" onClick={captureVoice} className={`px-4 rounded-2xl border ${listening ? 'bg-rose-500 text-white' : 'border-cyan-500 text-cyan-600'}`}><Mic className="w-5 h-5" /></button></div><button type="button" onClick={nextQuestion} className="w-full py-4 rounded-2xl bg-cyan-600 text-white font-black">Continue <ArrowRight className="inline w-4 h-4" /></button></div>;
+  };
+  return <div className="space-y-6 animate-fadeIn">
+    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4"><div><span className="text-[10px] uppercase font-black tracking-wider text-cyan-600">Step 5 of 10 • Clinical interview</span><h2 className="text-2xl font-black text-slate-900 dark:text-white">{mode === 'pathway' ? 'How would you like to proceed?' : mode === 'complaint' ? 'What brings you here today?' : 'Your health interview'}</h2></div><div className="flex items-center gap-2 text-xs font-bold"><span>{props.carePathway === 'ayurveda' ? '🌿 Ayurveda' : '🩺 Allopathy'}</span>{isVoiceEnabled && <span className="text-cyan-600"><Volume2 className="inline w-4 h-4" /> Voice on</span>}</div></div>
+    {mode === 'pathway' && <div className="grid sm:grid-cols-2 gap-4"><button type="button" onClick={() => { props.setCarePathway('allopathy'); setMode('complaint'); }} className="p-7 rounded-3xl border-2 border-cyan-500 bg-cyan-500/10 text-left"><div className="text-4xl mb-4">🩺</div><div className="text-lg font-black">Allopathy / General Medicine</div><div className="text-sm text-slate-500">Modern medical consultation</div></button><button type="button" onClick={() => { props.setCarePathway('ayurveda'); setMode('complaint'); }} className="p-7 rounded-3xl border-2 border-emerald-500 bg-emerald-500/10 text-left"><div className="text-4xl mb-4">🌿</div><div className="text-lg font-black">Ayurveda / AYUSH</div><div className="text-sm text-slate-500">Traditional Ayurvedic consultation</div></button></div>}
+    {mode === 'complaint' && <><p className="text-slate-500">Choose the closest option, speak, or type in your own words. We will ask only relevant follow-up questions.</p><div className="grid grid-cols-2 sm:grid-cols-4 gap-3">{COMPLAINT_OPTIONS.map((option) => <button type="button" key={option.key} onClick={() => chooseComplaint(option.key, option.label)} className="p-4 rounded-2xl border border-slate-200 dark:border-slate-700 text-left hover:border-cyan-500"><div className="text-2xl">{option.icon}</div><div className="text-xs font-black mt-2">{option.label}</div></button>)}</div><div className="flex gap-2"><input value={props.chiefComplaint} onChange={(event) => props.setChiefComplaint(event.target.value)} placeholder="Describe another problem" className="flex-1 px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800" /><button type="button" onClick={captureVoice} className="px-4 rounded-2xl border border-cyan-500 text-cyan-600"><Mic className="w-5 h-5" /></button><button type="button" onClick={() => chooseComplaint('other', props.chiefComplaint || 'Other')} className="px-5 rounded-2xl bg-cyan-600 text-white font-black">Start</button></div></>}
+    {mode === 'questions' && question && <><div className="flex items-center justify-between text-xs font-bold text-slate-500"><span>{question.category}</span><span>{questionIndex + 1} of {questions.length}</span></div><div className="h-2 rounded-full bg-slate-100 dark:bg-slate-800"><div className="h-2 rounded-full bg-cyan-500 transition-all" style={{ width: `${((questionIndex + 1) / questions.length) * 100}%` }} /></div><div className="p-6 sm:p-10 rounded-3xl bg-slate-50 dark:bg-slate-800/70 text-center"><div className="flex justify-center gap-3 mb-5"><button type="button" onClick={() => void speakText(questionText, props.selectedLanguage)} className="p-4 rounded-full bg-cyan-500/10 text-cyan-600" title="Read this question aloud"><Volume2 className="w-6 h-6" /></button><button type="button" onClick={captureVoice} className={`px-5 rounded-2xl border font-bold ${listening ? 'bg-rose-500 text-white border-rose-500' : 'border-cyan-500 text-cyan-600'}`}><Mic className="inline w-5 h-5 mr-2" />{listening ? 'Listening...' : 'Answer by voice'}</button></div><h3 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white">{questionText}</h3><div className="mt-8 text-left">{renderInput()}</div></div>{props.interviewState.urgency === 'IMMEDIATE' && <div className="p-5 rounded-3xl border-2 border-rose-500 bg-rose-500/10 text-rose-700 dark:text-rose-300"><div className="font-black text-lg"><ShieldAlert className="inline w-5 h-5 mr-2" />Clinical Safety Alert</div><p className="mt-2 text-sm">Potential clinical red flag detected. Immediate clinical review recommended. Please alert clinical staff. Decision support only — clinician review required.</p><p className="mt-2 text-xs font-bold">Why flagged: {props.interviewState.evidence.join('; ')}</p></div>}</>}
+    {notice && <div className="p-3 rounded-2xl bg-cyan-500/10 text-cyan-700 dark:text-cyan-300 text-sm">{notice}</div>}
+    <div className="flex justify-between pt-4 border-t border-slate-100 dark:border-slate-800"><button type="button" onClick={props.onBack} className="px-4 py-3 rounded-2xl text-sm font-bold"><ArrowLeft className="inline w-4 h-4" /> Back</button>{mode === 'questions' && <div className="text-xs font-bold text-emerald-600 flex items-center"><CheckCircle2 className="w-4 h-4 mr-1" /> Structured answers are saved as you go</div>}</div>
+  </div>;
 };

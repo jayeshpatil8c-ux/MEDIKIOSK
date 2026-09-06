@@ -554,6 +554,14 @@ export const DoctorStationView: React.FC<Props> = ({ onNavigateTab, onSelectPati
                     <span>ABHA ID: {currentPatient.demographics.abhaId || 'N/A'}</span>
                     <span>Phone: {currentPatient.demographics.phone}</span>
                   </p>
+                  <div className="flex flex-wrap gap-2 mt-2 text-[11px] font-bold">
+                    <span className="px-2 py-1 rounded-lg bg-cyan-500/10 text-cyan-700 dark:text-cyan-300">
+                      {currentPatient.symptoms?.carePathway === 'ayurveda' ? '🌿 Ayurveda / AYUSH' : '🩺 Allopathy / General Medicine'}
+                    </span>
+                    <span className={`px-2 py-1 rounded-lg ${currentPatient.symptoms?.urgency === 'IMMEDIATE' ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'}`}>
+                      Urgency: {currentPatient.symptoms?.urgency || 'ROUTINE'}
+                    </span>
+                  </div>
                 </div>
 
                 <button
