@@ -20,11 +20,31 @@ import { runClinicalSafetyChecks } from './safetyEngine.js';
 import { EventEmitter } from 'node:events';
 import { PersistentRepository, PersistedCollections } from './persistence.js';
 
+export type ClinicalRealtimeEventType =
+  | 'patient.created'
+  | 'patient.updated'
+  | 'case.created'
+  | 'case.updated'
+  | 'case.answer.updated'
+  | 'case.status.changed'
+  | 'triage.updated'
+  | 'safety_flag.created'
+  | 'safety_flag.acknowledged'
+  | 'document.uploaded'
+  | 'queue.updated'
+  | 'queue.token.created'
+  | 'appointment.created'
+  | 'doctor.note.updated'
+  | 'patient.completed';
+
 export interface ClinicalRealtimeEvent {
-  type: 'patient.created' | 'patient.updated' | 'case.updated' | 'case.status.changed' | 'safety_flag.created' | 'queue.updated';
+  type: ClinicalRealtimeEventType;
   patientId?: string;
+  patientName?: string;
+  tokenNumber?: string;
   changedSections?: string[];
   updatedAt: string;
+  payload?: any;
 }
 
 class InMemoryDatabase extends EventEmitter {
@@ -71,8 +91,11 @@ class InMemoryDatabase extends EventEmitter {
     const snapshot = this.persistedState();
     this.writeChain = this.writeChain
       .then(() => this.repository.save(snapshot))
+      .then(() => {
+        // Emitted ONLY AFTER database write succeeds
+        this.emit('change', event);
+      })
       .catch((error) => console.error('Database write failed:', error));
-    this.emit('change', event);
   }
 
   public updateCaseStatus(patientId: string, status: Patient['status'], user = 'Staff Member', role: any = 'Doctor'): Patient {
@@ -1488,6 +1511,21 @@ class InMemoryDatabase extends EventEmitter {
       `Consultation completed for ${patient.demographics.fullName} (${patient.opdToken})`
     );
 
+    this.publish({ type: 'patient.completed', patientId, patientName: patient.demographics.fullName, changedSections: ['status', 'queue'], updatedAt: patient.updatedAt });
+
+    return patient;
+  }
+
+  acknowledgeSafetyAlert(patientId: string, alertId: string, user = 'Dr. Arvind Mehta', role: any = 'Doctor'): Patient {
+    const patient = this.patients.find((p) => p.id === patientId);
+    if (!patient) throw new Error('Patient not found');
+    const alert = patient.safetyAlerts?.find((a) => a.id === alertId);
+    if (alert) {
+      alert.acknowledged = true;
+      patient.updatedAt = new Date().toISOString();
+      this.logAudit(user, role, 'SAFETY_ALERT_ACKNOWLEDGED', 'SafetyAlert', alertId, undefined, undefined, alert.title, `Alert acknowledged by ${user}`);
+      this.publish({ type: 'safety_flag.acknowledged', patientId, patientName: patient.demographics.fullName, changedSections: ['safety'], updatedAt: patient.updatedAt });
+    }
     return patient;
   }
 
@@ -1512,6 +1550,14 @@ class InMemoryDatabase extends EventEmitter {
       }
       patient.updatedAt = new Date().toISOString();
     }
+
+    this.publish({
+      type: 'queue.updated',
+      patientId: token.patientId,
+      tokenNumber: token.tokenNumber,
+      changedSections: ['queue'],
+      updatedAt: new Date().toISOString(),
+    });
 
     return token;
   }

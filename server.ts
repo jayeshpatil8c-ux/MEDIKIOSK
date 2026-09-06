@@ -8,7 +8,7 @@ import { runClinicalSafetyChecks } from './server/safetyEngine.js';
 async function startServer() {
   await db.initialize();
   const app = express();
-  const PORT = Number(process.env.PORT || 8080);
+  const PORT = 3000;
   const realtimeClients = new Set<Response>();
 
   // JSON middleware
@@ -48,7 +48,7 @@ async function startServer() {
       geminiConfigured: Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY'),
       timestamp: new Date().toISOString(),
       realtimeClients: realtimeClients.size,
-      persistence: process.env.DATABASE_URL ? 'postgresql' : `sqlite:${process.env.SQLITE_FILE || 'data/medikiosk.sqlite'}`,
+      persistence: 'in-memory-with-local-store',
     });
   });
 
@@ -173,6 +173,10 @@ async function startServer() {
     try { res.json({ success: true, case: db.updateCaseStatus(req.params.id, req.body.status, req.body.user, req.body.role) }); }
     catch (error: any) { res.status(400).json({ success: false, message: error.message }); }
   });
+  app.patch('/api/patients/:id/status', (req, res) => {
+    try { res.json({ success: true, patient: db.updateCaseStatus(req.params.id, req.body.status, req.body.user, req.body.role) }); }
+    catch (error: any) { res.status(400).json({ success: false, message: error.message }); }
+  });
 
   // Patients: Register (with duplicate detection)
   app.post('/api/patients', (req, res) => {
@@ -294,6 +298,17 @@ async function startServer() {
       res.json({ success: true, alerts });
     } catch (err: any) {
       res.status(400).json({ success: false, message: 'Safety check calculation error' });
+    }
+  });
+
+  // Acknowledge Safety Alert
+  app.post('/api/patients/:id/safety-alert/:alertId/ack', (req, res) => {
+    try {
+      const { user, role } = req.body;
+      const updated = db.acknowledgeSafetyAlert(req.params.id, req.params.alertId, user || 'Dr. Arvind Mehta', role || 'Doctor');
+      res.json({ success: true, patient: updated, message: 'Safety alert acknowledged.' });
+    } catch (err: any) {
+      res.status(400).json({ success: false, message: err.message || 'Error acknowledging alert' });
     }
   });
 

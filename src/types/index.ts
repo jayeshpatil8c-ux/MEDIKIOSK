@@ -23,7 +23,16 @@ export type PatientStatus =
   | 'AYUSH Consultation'
   | 'Prescription Issued'
   | 'Referred'
-  | 'Case Closed';
+  | 'Case Closed'
+  | 'CREATED'
+  | 'REGISTRATION'
+  | 'HISTORY_IN_PROGRESS'
+  | 'DOCUMENT_COLLECTION'
+  | 'REVIEW_PENDING'
+  | 'READY_FOR_DOCTOR'
+  | 'IN_CONSULTATION'
+  | 'COMPLETED'
+  | 'CANCELLED';
 
 export interface PatientDemographics {
   fullName: string;

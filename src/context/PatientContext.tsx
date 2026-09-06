@@ -48,6 +48,10 @@ interface PatientContextType {
   markNotificationRead: (id: string) => Promise<void>;
   updateQueueStatus: (tokenIdOrNumber: string, status: 'Waiting' | 'In Triage' | 'Waiting for Doctor' | 'In Consultation' | 'Completed') => Promise<void>;
   completeConsultation: (patientId: string, clinicalNotes?: string, diagnosis?: string) => Promise<Patient>;
+  updateCaseStatus: (patientId: string, status: Patient['status']) => Promise<Patient>;
+  acknowledgeSafetyAlert: (patientId: string, alertId: string) => Promise<Patient>;
+  liveAlertToast: { id: string; message: string; patientId?: string; token?: string; timestamp: string } | null;
+  clearLiveAlertToast: () => void;
 }
 
 const PatientContext = createContext<PatientContextType | undefined>(undefined);
@@ -114,6 +118,10 @@ export const PatientProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   }, []);
 
+  const [liveAlertToast, setLiveAlertToast] = useState<{ id: string; message: string; patientId?: string; token?: string; timestamp: string } | null>(null);
+
+  const clearLiveAlertToast = () => setLiveAlertToast(null);
+
   useEffect(() => {
     refreshData();
   }, [refreshData]);
@@ -124,10 +132,58 @@ export const PatientProvider: React.FC<{ children: React.ReactNode }> = ({ child
       return;
     }
     const source = new EventSource('/api/realtime');
-    const refreshFromEvent = () => { setRealtimeStatus('connected'); void refreshData(); };
-    source.onopen = () => setRealtimeStatus('connected');
+    
+    const refreshFromEvent = (evt: MessageEvent) => {
+      setRealtimeStatus('connected');
+      void refreshData();
+      try {
+        if (evt.data) {
+          const parsed = JSON.parse(evt.data);
+          if (evt.type === 'patient.created' || parsed.type === 'patient.created') {
+            const patientName = parsed.patientName || parsed.payload?.fullName || 'New Patient';
+            const token = parsed.tokenNumber || parsed.payload?.token || '';
+            setLiveAlertToast({
+              id: `toast-${Date.now()}`,
+              message: `New patient registration received: ${patientName}${token ? ` (${token})` : ''}`,
+              patientId: parsed.patientId || parsed.payload?.id,
+              token,
+              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            });
+          }
+        }
+      } catch {
+        // Safe json parse ignore
+      }
+    };
+
+    source.onopen = () => {
+      setRealtimeStatus('connected');
+      void refreshData();
+    };
     source.onerror = () => setRealtimeStatus('reconnecting');
-    ['patient.created', 'patient.updated', 'case.updated', 'case.status.changed', 'safety_flag.created', 'queue.updated'].forEach((eventName) => source.addEventListener(eventName, refreshFromEvent));
+
+    const sseEventTypes = [
+      'patient.created',
+      'patient.updated',
+      'case.created',
+      'case.updated',
+      'case.answer.updated',
+      'case.status.changed',
+      'triage.updated',
+      'safety_flag.created',
+      'safety_flag.acknowledged',
+      'document.uploaded',
+      'queue.updated',
+      'queue.token.created',
+      'appointment.created',
+      'doctor.note.updated',
+      'patient.completed',
+    ];
+
+    sseEventTypes.forEach((eventName) => {
+      source.addEventListener(eventName, refreshFromEvent as EventListener);
+    });
+
     return () => source.close();
   }, [refreshData]);
 
@@ -382,6 +438,49 @@ export const PatientProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return data.patient;
   };
 
+  const updateCaseStatus = async (patientId: string, status: Patient['status']): Promise<Patient> => {
+    const res = await fetch(`/api/cases/${patientId}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        status,
+        user: currentUser.name,
+        role: currentUser.role,
+      }),
+    });
+    const data = await res.json();
+    if (!data.success) {
+      throw new Error(data.message || 'Failed to update case status');
+    }
+    await refreshData();
+    if (data.case) {
+      setActivePatient(data.case);
+      return data.case;
+    }
+    return activePatient!;
+  };
+
+  const acknowledgeSafetyAlert = async (patientId: string, alertId: string): Promise<Patient> => {
+    const res = await fetch(`/api/patients/${patientId}/safety-alert/${alertId}/ack`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user: currentUser.name,
+        role: currentUser.role,
+      }),
+    });
+    const data = await res.json();
+    if (!data.success) {
+      throw new Error(data.message || 'Failed to acknowledge safety alert');
+    }
+    await refreshData();
+    if (data.patient) {
+      setActivePatient(data.patient);
+      return data.patient;
+    }
+    return activePatient!;
+  };
+
   return (
     <PatientContext.Provider
       value={{
@@ -416,6 +515,10 @@ export const PatientProvider: React.FC<{ children: React.ReactNode }> = ({ child
         markNotificationRead,
         updateQueueStatus,
         completeConsultation,
+        updateCaseStatus,
+        acknowledgeSafetyAlert,
+        liveAlertToast,
+        clearLiveAlertToast,
       }}
     >
       {children}

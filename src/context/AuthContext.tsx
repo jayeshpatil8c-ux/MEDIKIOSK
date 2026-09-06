@@ -6,6 +6,9 @@ interface AuthContextType {
   currentRole: UserRole;
   switchRole: (role: UserRole) => void;
   switchUser: (userId: string) => void;
+  login: (identifier: string, role?: UserRole) => Promise<boolean>;
+  logout: () => void;
+  isAuthenticated: boolean;
   users: User[];
   canPerformDoctorActions: boolean;
   canPerformNurseActions: boolean;
@@ -53,6 +56,9 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [users, setUsers] = useState<User[]>(DEFAULT_USERS);
   const [currentUser, setCurrentUser] = useState<User>(DEFAULT_USERS[0]);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    return localStorage.getItem('medikiosk_authenticated') === 'true';
+  });
 
   useEffect(() => {
     fetch('/api/users')
@@ -60,7 +66,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       .then((data) => {
         if (data.success && data.users?.length) {
           setUsers(data.users);
+          const savedUserId = localStorage.getItem('medikiosk_user_id');
           const savedRole = localStorage.getItem('medikiosk_role');
+          if (savedUserId) {
+            const matchUser = data.users.find((u: User) => u.id === savedUserId);
+            if (matchUser) {
+              setCurrentUser(matchUser);
+              return;
+            }
+          }
           if (savedRole) {
             const match = data.users.find((u: User) => u.role === savedRole);
             if (match) setCurrentUser(match);
@@ -72,11 +86,44 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
   }, []);
 
+  const login = async (identifier: string, role?: UserRole): Promise<boolean> => {
+    const matched = users.find(
+      (u) =>
+        u.email.toLowerCase() === identifier.toLowerCase() ||
+        u.name.toLowerCase().includes(identifier.toLowerCase()) ||
+        (role && u.role === role)
+    ) || users.find((u) => (role ? u.role === role : true)) || users[0];
+
+    setCurrentUser(matched);
+    setIsAuthenticated(true);
+    localStorage.setItem('medikiosk_authenticated', 'true');
+    localStorage.setItem('medikiosk_user_id', matched.id);
+    localStorage.setItem('medikiosk_role', matched.role);
+
+    try {
+      await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: matched.role }),
+      });
+    } catch {
+      // Offline fallback
+    }
+
+    return true;
+  };
+
+  const logout = () => {
+    setIsAuthenticated(false);
+    localStorage.removeItem('medikiosk_authenticated');
+  };
+
   const switchRole = (role: UserRole) => {
     const match = users.find((u) => u.role === role);
     if (match) {
       setCurrentUser(match);
       localStorage.setItem('medikiosk_role', role);
+      localStorage.setItem('medikiosk_user_id', match.id);
       fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -90,6 +137,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (match) {
       setCurrentUser(match);
       localStorage.setItem('medikiosk_role', match.role);
+      localStorage.setItem('medikiosk_user_id', match.id);
     }
   };
 
@@ -102,6 +150,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         currentRole,
         switchRole,
         switchUser,
+        login,
+        logout,
+        isAuthenticated,
         users,
         canPerformDoctorActions: currentRole === 'Doctor' || currentRole === 'Admin',
         canPerformNurseActions: currentRole === 'Nurse' || currentRole === 'Admin',
